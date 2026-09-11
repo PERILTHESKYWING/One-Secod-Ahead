@@ -32,6 +32,19 @@ const SQUASH_MAX_STRETCH = .2;     /* stretch ceiling, as a fraction of scale */
 const SQUASH_DASH_STRETCH = .2;    /* what a dash stamps on directly */
 const SQUASH_DECAY = 10;           /* approach() rate the stretch relaxes at */
 
+/* ---------------- ammo --------------------------------------------------
+   The base weapon carries a short magazine instead of firing forever. Every
+   shot — one trigger pull, however many pellets multishot turns it into —
+   spends one charge. The instant the magazine isn't full, a delay starts
+   counting down; firing again resets it. Stop shooting for that long and
+   the whole magazine snaps back at once rather than trickling in a charge
+   at a time, so a brief pause is enough to be back at full strength. */
+const AMMO_MAX = 6;              /* charges in a full magazine */
+const AMMO_REFILL_DELAY = .55;   /* seconds of not firing before a full refill */
+const AMMO_RING_RADIUS = 30;     /* px out from the hull the ring sits at */
+const AMMO_RING_WIDTH = 3;       /* stroke width of one charge segment */
+const AMMO_RING_GAP = .09;       /* radians of gap between segments */
+
 /* ---------------- run setup -------------------------------------------- */
 function baseMods() {
   return {
@@ -54,7 +67,8 @@ function makePlayer() {
   return {
     x: W / 2, y: H * .6, vx: 0, vy: 0, r: 13, aim: -Math.PI / 2,
     kb: { x: 0, y: 0 }, dashBuffer: 0, fireBuffer: 0, stretch: 0, stretchAng: -Math.PI / 2,
-    hp: maxHp, maxHp, fireCd: 0, hurtFlash: 0, hitFlash: 0, iframe: 0,
+    hp: maxHp, maxHp, fireCd: 0, ammo: AMMO_MAX, ammoMax: AMMO_MAX, ammoRefillT: 0,
+    hurtFlash: 0, hitFlash: 0, iframe: 0,
     dashMax: 1, dash: 1, dashCd: 0, dashing: 0, dashHits: null,
     echoMax: 1 + lvlOf("echoCharge"), echo: 1 + lvlOf("echoCharge"), echoCd: 0,
     surge: 0, surgeActive: 0,
@@ -462,12 +476,15 @@ function triggerSurge() {
 /* ---------------- player ------------------------------------------------ */
 function fire() {
   const p = G.player, m = G.mods;
+  if (p.ammo <= 0) return;
   if (BRANCHFN.id === "emberwake") {
     if (G.jam > 0) { p.fireCd = .1; return; }
     G.heat += .052;
     if (G.heat >= 1) { G.jam = 1.25; G.heat = 1; Audio_.emberVent(); text(p.x, p.y - 34, "overheated", "255,120,80", 15); shake(.14); return; }
   }
   G.shotsThisWave = (G.shotsThisWave || 0) + 1;
+  p.ammo = Math.max(0, p.ammo - 1);
+  p.ammoRefillT = AMMO_REFILL_DELAY;
   const dmg = 11 * m.dmgMul;
   const n = 1 + m.multishot;
   const spread = n > 1 ? .05 * (n - 1) : 0;
@@ -612,6 +629,14 @@ function updatePlayer(dt, input) {
   if (p.dash < p.dashMax) { p.dashCd -= dt; if (p.dashCd <= 0) { p.dash++; p.dashCd = .85 * m.dashCdMul; } }
   else p.dashCd = Math.max(0, p.dashCd - dt);
   if (p.echo < p.echoMax) { p.echoCd -= dt; if (p.echoCd <= 0) { p.echo++; p.echoCd = 8.5; } }
+  if (p.ammo < p.ammoMax) {
+    p.ammoRefillT -= dt;
+    if (p.ammoRefillT <= 0) {
+      p.ammo = p.ammoMax;
+      ring(p.x, p.y, TH.core, 8, AMMO_RING_RADIUS + 8, .32, 2);
+      Audio_.pickup();
+    }
+  }
   p.aim = Math.atan2(input.aimY - p.y, input.aimX - p.x);
 
   if (p.dashing > 0) {
@@ -660,7 +685,7 @@ function updatePlayer(dt, input) {
      clears inside the window the shot goes out on that frame instead of
      needing a second press */
   p.fireBuffer = input.fire ? FIRE_INPUT_BUFFER : Math.max(0, p.fireBuffer - dt);
-  if (p.fireBuffer > 0 && p.fireCd <= 0 && p.dashing <= 0) { fire(); p.fireBuffer = 0; }
+  if (p.fireBuffer > 0 && p.fireCd <= 0 && p.dashing <= 0 && p.ammo > 0) { fire(); p.fireBuffer = 0; }
   p.fireCd -= dt;
   /* same for dash, which doubles as the swap when a decoy is out. Readiness
      is checked here rather than inside doDash() so a buffered press doesn't

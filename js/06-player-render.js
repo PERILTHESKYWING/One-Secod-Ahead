@@ -88,6 +88,29 @@ function heroBody(p, o) {
     ctx.beginPath(); ctx.arc(-r * .05, 0, r * .28, 0, TAU); ctx.stroke();
   }
 }
+/* six segments around the hull, one per charge in the magazine. Lit for
+   what's left, dim for what's spent; the thin outer sweep (only shown while
+   short a charge) is how close the whole magazine is to snapping back. */
+function drawAmmoRing(p) {
+  const n = p.ammoMax, r = p.r + AMMO_RING_RADIUS;
+  const step = TAU / n, seg = step - AMMO_RING_GAP;
+  ctx.save();
+  ctx.translate(p.x, p.y);
+  ctx.lineCap = "butt";
+  for (let i = 0; i < n; i++) {
+    const a0 = -Math.PI / 2 + i * step + AMMO_RING_GAP / 2;
+    ctx.strokeStyle = i < p.ammo ? "rgba(" + TH.core + ",.85)" : "rgba(" + TH.core + ",.16)";
+    ctx.lineWidth = AMMO_RING_WIDTH;
+    ctx.beginPath(); ctx.arc(0, 0, r, a0, a0 + seg); ctx.stroke();
+  }
+  if (p.ammo < p.ammoMax) {
+    const f = 1 - clamp(p.ammoRefillT / AMMO_REFILL_DELAY, 0, 1);
+    ctx.strokeStyle = "rgba(" + TH.rim + ",.55)";
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(0, 0, r + AMMO_RING_WIDTH * .9 + 1.5, -Math.PI / 2, -Math.PI / 2 + TAU * f); ctx.stroke();
+  }
+  ctx.restore();
+}
 function drawPlayer() {
   const p = G.player;
   if (!p) return;
@@ -153,6 +176,9 @@ function drawPlayer() {
     ctx.beginPath(); ctx.arc(0, 0, p.r * 1.12, 0, TAU); ctx.fill();
   }
   ctx.restore();
+  /* drawn outside the body's own transform, so squash/stretch and the fire
+     kick never deform it — it manages its own translate, same as drawEcho */
+  drawAmmoRing(p);
   /* swap charge halo */
   if (p.swapFlash > 0) {
     ctx.save();
