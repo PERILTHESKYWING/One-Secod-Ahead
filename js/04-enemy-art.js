@@ -4,39 +4,41 @@ function fillBody(r, c, key) {
   ctx.fillStyle = bodyGrad(key, r, "rgb(" + shade(c, 1.3, .34, [255, 255, 255]) + ")", "rgb(" + shade(c, .5) + ")");
 }
 const ART = {
-  /* ---- HUSK — a lurching cracked-mask revenant with dangling claw arms --- */
+  /* ---- HUSK — a breacher drone with folding coil-lance manipulators ----- */
   husk(e, c) {
     const w = e.wob, r = e.r;
     const dark = "rgb(" + shade(c, .4) + ")", mid = "rgb(" + shade(c, .72) + ")";
-    const bone = "rgb(" + shade(c, 1.35, .62, [255, 250, 245]) + ")";
+    const hot = "rgb(" + shade(c, 1.35, .5, [255, 200, 190]) + ")";
     const lunge = e.state === 2 ? 1 : 0;
     ctx.save();
     ctx.rotate(e.ang);
-    /* legs — two lurching stalks under the body */
+    /* legs — piston struts */
     for (const sgn of [-1, 1]) {
       const sw = Math.sin(w * 2 + (sgn > 0 ? 0 : Math.PI)) * .55 * (1 - lunge);
-      limb(-r * .3, sgn * r * .5, r * 1.25, Math.PI * (sgn > 0 ? .52 : 1.48), sw, mid, 3.4);
-      ctx.fillStyle = mid;
-      const fx = -r * .3 + Math.cos(Math.PI * (sgn > 0 ? .52 : 1.48) + sw) * r * 1.4;
-      const fy = sgn * r * .5 + Math.sin(Math.PI * (sgn > 0 ? .52 : 1.48) + sw) * r * 1.4;
-      ctx.beginPath(); ctx.arc(fx, fy, r * .16, 0, TAU); ctx.fill();
+      strut(-r * .3, sgn * r * .5, r * 1.25, Math.PI * (sgn > 0 ? .52 : 1.48), sw, mid, 3.4);
     }
-    /* trailing rag */
-    ctx.globalAlpha = .55;
-    hem(r * .8, w, 1.5, dark, 5, .2);
+    /* exhaust flare, replacing the trailing rag */
+    ctx.globalAlpha = .4;
+    glowPool(-r * .7, 0, r * .7, c, .3);
     ctx.globalAlpha = 1;
-    /* arms — long, forward, ending in claws */
+    /* arms — folding coil-lances, straight to a spike-driver tip when lunging */
     for (const sgn of [-1, 1]) {
       const sw = Math.sin(w * 2 + (sgn > 0 ? 1.6 : 0)) * .3 - lunge * .5;
       const ex = r * 1.5 + lunge * r * .5, ey = sgn * r * (1.05 - lunge * .35);
-      ctx.strokeStyle = mid; ctx.lineWidth = 4; ctx.lineCap = "round";
+      const kx = -r * .1 + (ex - -r * .1) * .55, ky = sgn * r * .6 + (ey - sgn * r * .6) * .4;
+      ctx.strokeStyle = mid; ctx.lineWidth = 4; ctx.lineCap = "butt"; ctx.lineJoin = "miter";
       ctx.beginPath();
-      ctx.moveTo(-r * .1, sgn * r * .6);
-      ctx.quadraticCurveTo(r * .55, sgn * r * (1.35 + sw * .4), ex, ey);
+      ctx.moveTo(-r * .1, sgn * r * .6); ctx.lineTo(kx, ky); ctx.lineTo(ex, ey);
       ctx.stroke();
-      claw(ex, ey, sgn * .35, r * .7, bone, 2.4);
+      ctx.fillStyle = dark;
+      ctx.beginPath(); ctx.arc(kx, ky, r * .1, 0, TAU); ctx.fill();
+      ctx.save(); ctx.translate(ex, ey);
+      ctx.rotate(Math.atan2(ey - ky, ex - kx));
+      ctx.fillStyle = hot;
+      tri(0, -r * .12, 0, r * .12, r * .32, 0); ctx.fill();
+      ctx.restore();
     }
-    /* hunched torso */
+    /* hunched chassis */
     ctx.fillStyle = bodyGrad("huskBody", r, "rgb(" + shade(c, 1.2, .25, [255, 255, 255]) + ")", "rgb(" + shade(c, .46) + ")");
     ctx.beginPath();
     ctx.moveTo(r * .5, -r * .82);
@@ -44,31 +46,24 @@ const ART = {
     ctx.quadraticCurveTo(-r * .55, r * 1.02, -r * .82, 0);
     ctx.quadraticCurveTo(-r * .55, -r * 1.02, r * .5, -r * .82);
     ctx.closePath(); ctx.fill(); outline(r, c);
-    /* ribs */
+    /* panel seams, not ribs */
     ctx.strokeStyle = "rgba(" + shade(c, .35) + ",.75)"; ctx.lineWidth = 1.5;
     for (let i = -1; i <= 1; i++) {
-      ctx.beginPath();
-      ctx.arc(r * .05, i * r * .34, r * .46, -1.15, 1.15);
-      ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-r * .55, i * r * .34); ctx.lineTo(r * .48, i * r * .34); ctx.stroke();
     }
     cracks(r, e.hp / e.maxHp, "rgb(" + shade(c, .28) + ")");
-    /* head — a bone mask jutting forward */
+    /* head — a faceless sensor housing jutting forward */
     ctx.save();
     ctx.translate(r * .58, Math.sin(w * 2) * r * .06);
     ctx.rotate(Math.sin(w) * .1);
-    ctx.fillStyle = bone;
+    ctx.fillStyle = dark;
     ctx.beginPath();
     ctx.moveTo(r * .62, 0);
     ctx.quadraticCurveTo(r * .3, r * .5, -r * .3, r * .42);
     ctx.quadraticCurveTo(-r * .5, 0, -r * .3, -r * .42);
     ctx.quadraticCurveTo(r * .3, -r * .5, r * .62, 0);
     ctx.closePath(); ctx.fill();
-    ctx.strokeStyle = "rgba(" + shade(c, .3) + ",.6)"; ctx.lineWidth = 1.1;
-    ctx.beginPath(); ctx.moveTo(r * .58, 0); ctx.lineTo(-r * .18, 0); ctx.stroke();
-    fangs(r * .12, r * .22, r * .62, 4, r * .2, "rgba(" + shade(c, .3) + ",.9)", 1);
-    /* one furious eye */
-    faceEye(r * .02, -r * .16, r * .27, 0, "rgb(" + shade(c, .95, .1, [255, 80, 80]) + ")",
-      { blink: e.blink, brow: "rgb(" + shade(c, .32) + ")", angry: 1, slit: 1 });
+    visor(r * .1, 0, r * .12, r * .48, shade(c, 1.4, .3, [255, 90, 90]), .5 + lunge * .5, Math.PI / 2);
     ctx.restore();
     rimLight(r);
     ctx.restore();
@@ -81,7 +76,7 @@ const ART = {
     }
   },
 
-  /* ---- DART — a hornet with swept wings and a heat-glowing stinger ------- */
+  /* ---- DART — an interceptor drone with a rail-stinger nose ------------- */
   dart(e, c) {
     const r = e.r, ang = e.state === 2 ? e.lockAng : e.ang;
     const dark = "rgb(" + shade(c, .38) + ")", mid = "rgb(" + shade(c, .8) + ")";
@@ -95,7 +90,7 @@ const ART = {
       ctx.stroke(); ctx.restore();
     }
     ctx.rotate(ang);
-    /* wings — blur harder the faster it is going */
+    /* stabilizer vanes — blur harder the faster it is going */
     const beat = Math.sin(G.time * (e.state === 2 ? 60 : 26) + e.wob);
     for (const sgn of [-1, 1]) {
       ctx.save();
@@ -109,15 +104,13 @@ const ART = {
       ctx.restore();
     }
     ctx.globalAlpha = 1;
-    /* rear legs */
-    for (const sgn of [-1, 1]) limb(-r * .3, sgn * r * .35, r * .7, Math.PI * (sgn > 0 ? .7 : 1.3), sgn * .3, dark, 1.7);
-    /* abdomen segments */
-    ctx.fillStyle = mid;
+    /* rear landing struts, folded flush in flight */
+    for (const sgn of [-1, 1]) strut(-r * .3, sgn * r * .35, r * .7, Math.PI * (sgn > 0 ? .7 : 1.3), sgn * .3, dark, 1.7);
+    /* fuselage plates */
     for (let i = 0; i < 3; i++) {
       const f = i / 3;
-      ctx.beginPath();
-      ctx.ellipse(-r * (.55 + f * .55), 0, r * (.42 - f * .1), r * (.5 - f * .12), 0, 0, TAU);
-      ctx.fill();
+      const cx = -r * (.55 + f * .55), hw = r * (.42 - f * .1), hh = r * (.5 - f * .12);
+      plate(cx - hw, -hh, hw * 2, hh * 2, hw * .5, mid);
     }
     ctx.fillStyle = "rgba(" + shade(c, .32) + ",.9)";
     for (let i = 0; i < 3; i++) {
@@ -131,29 +124,12 @@ const ART = {
     ctx.quadraticCurveTo(-r * .72, 0, -r * .45, -r * .45);
     ctx.quadraticCurveTo(r * .35, -r * .72, r * 1.05, 0);
     ctx.closePath(); ctx.fill(); outline(r, c);
-    /* head + mandibles + twin eyes */
+    /* nose — a forward optic band, no mandibles, no antennae */
     ctx.save();
     ctx.translate(r * .95, 0);
     ctx.fillStyle = "rgb(" + shade(c, .5) + ")";
     ctx.beginPath(); ctx.ellipse(0, 0, r * .42, r * .38, 0, 0, TAU); ctx.fill();
-    for (const sgn of [-1, 1]) {
-      ctx.strokeStyle = "rgb(" + shade(c, 1.3, .5, [255, 250, 240]) + ")";
-      ctx.lineWidth = 2.1; ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(r * .2, sgn * r * .2);
-      ctx.quadraticCurveTo(r * .72, sgn * r * .34, r * .78, sgn * r * .05);
-      ctx.stroke();
-      /* antenna */
-      ctx.strokeStyle = "rgba(" + shade(c, .4) + ",.8)"; ctx.lineWidth = 1.3;
-      ctx.beginPath();
-      ctx.moveTo(r * .1, sgn * r * .3);
-      ctx.quadraticCurveTo(r * .5, sgn * r * .95, r * .95, sgn * r * .75 + Math.sin(G.time * 6 + e.wob) * 2);
-      ctx.stroke();
-    }
-    for (const sgn of [-1, 1]) {
-      faceEye(r * .06, sgn * r * .22, r * .19, 0,
-        "rgb(" + shade(c, 1.2, .25, [255, 210, 90]) + ")", { slit: 1, blink: e.blink });
-    }
+    visor(r * .05, 0, r * .1, r * .44, shade(c, 1.2, .25, [255, 210, 90]), .9, Math.PI / 2);
     ctx.restore();
     /* stinger + exhaust heat */
     ctx.fillStyle = "rgba(255,240,210," + hot + ")";
@@ -164,84 +140,64 @@ const ART = {
     glowPool(-r * 1.2, 0, r * (.5 + hot), "255,190,120", hot * .32);
   },
 
-  /* ---- BLOOM — a grinning bomb-jester whose head is a lit fuse ---------- */
+  /* ---- BLOOM — a payload drone with an iris-hatch core and charge spire - */
   bloom(e, c) {
     const r = e.r, t = clamp(e.fuse || 0, 0, 1);
     const open = .45 + t * .95 + Math.sin(G.time * 6 + e.wob) * .07;
     const panic = Math.sin(G.time * (7 + t * 26));
     ctx.rotate(e.ang);
-    /* little running legs */
+    /* little running struts */
     for (const sgn of [-1, 1]) {
-      limb(-r * .1, sgn * r * .3, r * .8, Math.PI * (sgn > 0 ? .62 : 1.38),
+      strut(-r * .1, sgn * r * .3, r * .8, Math.PI * (sgn > 0 ? .62 : 1.38),
         Math.sin(G.time * 16 + (sgn > 0 ? 0 : Math.PI)) * .8, "rgb(" + shade(c, .42) + ")", 2.4);
     }
-    /* petals peeling back from the core */
+    /* iris-hatch plates peeling open from the core */
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * TAU + e.wob * .25;
       ctx.save();
       ctx.rotate(a);
       ctx.translate(r * .3 * open, 0);
-      ctx.fillStyle = bodyGrad("bloomPetal", r * .8,
-        "rgb(" + shade(c, 1.3, .3, [255, 245, 235]) + ")", "rgb(" + shade(c, .45) + ")");
+      ctx.fillStyle = "rgb(" + shade(c, .72 + t * .15) + ")";
       ctx.beginPath();
       ctx.moveTo(0, 0);
       ctx.quadraticCurveTo(r * .55, r * .42, r * .95, 0);
       ctx.quadraticCurveTo(r * .55, -r * .42, 0, 0);
       ctx.closePath(); ctx.fill();
-      ctx.strokeStyle = "rgba(" + shade(c, .3) + ",.5)"; ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(" + shade(c, 1.4, .4, [255, 255, 255]) + ",.55)"; ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(r * .05, 0); ctx.lineTo(r * .85, 0); ctx.stroke();
       ctx.restore();
     }
-    /* the bulb */
+    /* the core */
     ctx.fillStyle = bodyGrad("bloomBody", r, "rgb(" + shade(c, 1.25, .3, [255, 255, 255]) + ")", "rgb(" + shade(c, .5) + ")");
     ctx.beginPath(); ctx.arc(0, 0, r * .72, 0, TAU); ctx.fill(); outline(r, c);
-    /* manic face */
-    for (const sgn of [-1, 1]) {
-      faceEye(r * .22, sgn * r * .26, r * .2 * (1 + t * .25), e.ang * 0,
-        "rgb(" + shade(c, .35, .2, [40, 20, 30]) + ")", { blink: e.blink, brow: "rgb(" + shade(c, .3) + ")", angry: t > .4 });
-    }
-    ctx.fillStyle = "rgba(" + shade(c, .26) + ",.92)";
-    ctx.beginPath();
-    ctx.moveTo(-r * .1, r * .0);
-    ctx.quadraticCurveTo(r * .3, r * .58 + t * r * .1, r * .5, -r * .05);
-    ctx.quadraticCurveTo(r * .2, r * .2, -r * .1, 0);
-    ctx.closePath(); ctx.fill();
-    fangs(r * .22, r * .06, r * .5, 4, r * .14, "rgba(255,250,245,.9)", 1);
-    /* fuse burning down on top */
-    ctx.strokeStyle = "rgb(" + shade(c, .38) + ")"; ctx.lineWidth = 2; ctx.lineCap = "round";
-    ctx.beginPath();
-    ctx.moveTo(-r * .12, -r * .68);
-    ctx.quadraticCurveTo(-r * .5, -r * 1.05, -r * .2 + panic * 2, -r * (1.25 - t * .35));
-    ctx.stroke();
-    const fx = -r * .2 + panic * 2, fy = -r * (1.25 - t * .35);
-    glowPool(fx, fy, r * (.5 + t * .5), "255,210,120", .55 + t * .4);
-    ctx.fillStyle = "rgba(255,250,220," + (.75 + t * .25) + ")";
-    ctx.beginPath(); ctx.arc(fx, fy, r * (.14 + t * .1), 0, TAU); ctx.fill();
+    /* countdown ring — the clock running down, no face */
+    clockTick(0, 0, r * .5, t, shade(c, 1.3, .2, [255, 210, 150]), 6);
+    ctx.fillStyle = "rgba(" + shade(c, .3, .2, [255, 210, 150]) + "," + (.6 + t * .4) + ")";
+    ctx.beginPath(); ctx.arc(0, 0, r * .14 * (1 + t * .3), 0, TAU); ctx.fill();
+    /* charge spire — a rigid antenna, arcing harder as the timer runs down */
+    ctx.strokeStyle = "rgb(" + shade(c, .5) + ")"; ctx.lineWidth = 2.2; ctx.lineCap = "round";
+    const sx = -r * .12, sy = -r * (1.15 - t * .3);
+    ctx.beginPath(); ctx.moveTo(-r * .12, -r * .68); ctx.lineTo(sx, sy); ctx.stroke();
+    glowPool(sx, sy, r * (.4 + t * .5), "255,210,120", .45 + t * .4);
+    if (t > .25) bolt(sx, sy, sx + panic * 6, sy - r * .18, "rgb(255,225,150)", 1.3 + t, 5);
     /* core heat */
     const heat = clamp(.4 + t * .6 + panic * .2, 0, 1);
     glowPool(0, 0, r * (1 + t), "255,180,120", heat * .2);
   },
 
-  /* ---- COLOSSUS — a plated brute with huge fists and a tiny angry head -- */
+  /* ---- COLOSSUS — a plated brute with hydraulic ram drivers ------------- */
   colossus(e, c) {
     const r = e.r, w = e.wob * 3.2;
     const dark = "rgb(" + shade(c, .34) + ")", mid = "rgb(" + shade(c, .66) + ")";
     const hi = "rgba(" + shade(c, 1.4, .35, [255, 255, 255]) + ",.55)";
     const charge = e.state === 2 ? 1 : e.state === 1 ? .5 : 0;
     ctx.save(); ctx.rotate(e.ang);
-    /* legs */
+    /* legs — piston struts */
     for (const sgn of [-1, 1]) {
       const sw = Math.sin(w + (sgn > 0 ? 0 : Math.PI)) * .3;
-      limb(-r * .45, sgn * r * .5, r * .7, Math.PI * (sgn > 0 ? .62 : 1.38), sw, dark, 7);
-      ctx.fillStyle = dark;
-      const a2 = Math.PI * (sgn > 0 ? .62 : 1.38) + sw;
-      ctx.save();
-      ctx.translate(-r * .45 + Math.cos(a2) * r * .8, sgn * r * .5 + Math.sin(a2) * r * .8);
-      ctx.rotate(a2);
-      rrect(-r * .16, -r * .2, r * .5, r * .4, r * .14); ctx.fill();
-      ctx.restore();
+      strut(-r * .45, sgn * r * .5, r * .7, Math.PI * (sgn > 0 ? .62 : 1.38), sw, dark, 7);
     }
-    /* arms + fists, cocked back when charging */
+    /* arms + ram drivers, cocked back when charging */
     for (const sgn of [-1, 1]) {
       const bob = Math.sin(w + (sgn > 0 ? 1 : 0)) * .18;
       const ax = r * (.55 + charge * .45), ay = sgn * r * (1.15 + bob * .2);
@@ -252,7 +208,7 @@ const ART = {
       ctx.rotate(sgn * .3 + bob);
       plate(-r * .34, -r * .32, r * .72, r * .64, r * .2, "rgb(" + shade(c, .76) + ")", hi);
       ctx.fillStyle = dark;
-      for (let k = -1; k <= 1; k++) ctx.fillRect(r * .18, k * r * .2 - r * .05, r * .16, r * .1);
+      ctx.fillRect(r * .14, -r * .04, r * .24, r * .08);
       ctx.restore();
     }
     /* torso — a hexagonal slab of armour */
@@ -267,40 +223,39 @@ const ART = {
     glowPool(r * .1, 0, r * .7, "255,170,110", fur * .34);
     ctx.fillStyle = "rgba(255,240,215," + (.6 + charge * .4) + ")";
     polyPath(r * .26, 6, -e.wob * .2); ctx.fill();
-    /* head — small, sunk between the shoulders */
+    /* head — a faceless reactor turret, sunk between the shoulders */
     ctx.save();
     ctx.translate(r * .62, 0);
     ctx.fillStyle = dark;
     rrect(-r * .22, -r * .3, r * .5, r * .6, r * .16); ctx.fill();
     visor(r * .12, 0, r * .12, r * .38, shade(c, 1.5, .3, [255, 220, 190]), .95, Math.PI / 2);
-    for (const sgn of [-1, 1]) horn(-r * .1, sgn * r * .28, sgn * 1.1, r * .5, r * .22, mid, .7);
     ctx.restore();
     cracks(r, e.hp / e.maxHp, "rgb(" + shade(c, .25) + ")");
     rimLight(r);
     ctx.restore();
   },
 
-  /* ---- WEAVER — a hooded caster with orb-hands and no legs at all ------- */
+  /* ---- WEAVER — a repulsor platform with twin projector pods ----------- */
   weaver(e, c) {
     const r = e.r, charge = clamp(1 - (e.timer || 1) / 2.2, 0, 1);
     const dark = "rgb(" + shade(c, .3) + ")", mid = "rgb(" + shade(c, .58) + ")";
     ctx.save();
     ctx.rotate(e.ang);
-    /* floating robe, dragging behind */
+    /* trailing hard-light mantle, not cloth */
     ctx.save();
     ctx.rotate(Math.PI);
-    hem(r * 1.05, e.wob, 2.1, "rgba(" + shade(c, .34) + ",.92)", 8, .18);
+    ctx.globalAlpha = .6;
+    hem(r * 1.05, e.wob, 2.1, "rgba(" + shade(c, 1.1, .2, [255, 255, 255]) + ",.5)", 8, .18);
+    ctx.globalAlpha = 1;
     ctx.restore();
-    /* orb hands */
+    /* projector pods */
     for (const sgn of [-1, 1]) {
       const hx = r * .5, hy = sgn * r * (.85 + Math.sin(e.wob + (sgn > 0 ? 0 : 1.6)) * .12);
       ctx.strokeStyle = mid; ctx.lineWidth = 2.6; ctx.lineCap = "round";
       ctx.beginPath(); ctx.moveTo(0, sgn * r * .4); ctx.quadraticCurveTo(r * .25, sgn * r * .8, hx, hy); ctx.stroke();
-      glowPool(hx, hy, r * (.5 + charge * .5), c, .35 + charge * .45);
-      ctx.fillStyle = "rgba(255,250,255," + (.55 + charge * .45) + ")";
-      ctx.beginPath(); ctx.arc(hx, hy, r * (.16 + charge * .14), 0, TAU); ctx.fill();
+      optic(hx, hy, r * (.24 + charge * .1), shade(c, 1.3, .3, [255, 255, 255]), charge, 0);
     }
-    /* body / hood */
+    /* body / hull */
     ctx.fillStyle = bodyGrad("weaverBody", r, "rgb(" + shade(c, 1.1, .2, [255, 255, 255]) + ")", "rgb(" + shade(c, .4) + ")");
     ctx.beginPath();
     ctx.moveTo(r * .62, 0);
@@ -308,84 +263,65 @@ const ART = {
     ctx.quadraticCurveTo(-r * .85, 0, -r * .5, -r * .78);
     ctx.quadraticCurveTo(r * .3, -r * .95, r * .62, 0);
     ctx.closePath(); ctx.fill(); outline(r, c);
-    /* hood shadow with a pair of eyes inside it */
-    ctx.fillStyle = "rgba(12,8,20,.82)";
+    /* forward sensor recess — no hood, no eyes */
+    ctx.fillStyle = "rgba(8,10,18,.7)";
     ctx.beginPath(); ctx.ellipse(r * .22, 0, r * .34, r * .5, 0, 0, TAU); ctx.fill();
-    for (const sgn of [-1, 1]) {
-      ctx.fillStyle = "rgb(" + shade(c, 1.5, .4, [255, 255, 255]) + ")";
-      ctx.beginPath();
-      ctx.ellipse(r * .26, sgn * r * .19, r * .13, r * .08 * (e.blink == null ? 1 : e.blink), sgn * .3, 0, TAU);
-      ctx.fill();
-    }
+    visor(r * .3, 0, r * .1, r * .4, "255,255,255", .55 + charge * .35, Math.PI / 2);
     ctx.restore();
-    /* the ring of woven thread it hangs inside */
+    /* the repulsor ring it hovers inside */
     ctx.save();
     ctx.rotate(e.wob * .4);
     ctx.strokeStyle = "rgba(" + shade(c, 1.05) + ",.55)"; ctx.lineWidth = 1.6;
     ctx.setLineDash([6, 9]);
     ctx.beginPath(); ctx.arc(0, 0, r * 1.5, 0, TAU); ctx.stroke();
     ctx.setLineDash([]);
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * TAU + e.wob * .8;
-      ctx.fillStyle = "rgb(" + shade(c, 1.25, .3, [255, 255, 255]) + ")";
-      ctx.beginPath(); ctx.arc(Math.cos(a) * r * 1.5, Math.sin(a) * r * 1.5, 2.6, 0, TAU); ctx.fill();
-    }
+    orbitRing(r * 1.5, 4, 2.6, 3, e.wob * .8, "rgb(" + shade(c, 1.25, .3, [255, 255, 255]) + ")");
     ctx.restore();
   },
 
-  /* ---- SPORE — a fat fungal thing with a cap and sleepy eyes ------------ */
+  /* ---- SPORE — a replicator pod carrying docked fragment modules -------- */
   spore(e, c) {
     const r = e.r, w = e.wob;
     const squish = 1 + Math.sin(w * 2) * .07;
     ctx.save();
     ctx.rotate(e.ang);
     ctx.scale(1 / squish, squish);
-    /* stubby feet */
+    /* skid pads */
     for (const sgn of [-1, 1]) {
       ctx.fillStyle = "rgb(" + shade(c, .5) + ")";
-      ctx.beginPath();
-      ctx.ellipse(-r * .1, sgn * r * .68, r * .3, r * .18, sgn * .2, 0, TAU);
-      ctx.fill();
+      rrect(-r * .35, sgn * r * .68 - r * .1, r * .5, r * .2, r * .08); ctx.fill();
     }
-    /* body */
+    /* pod body — a faceted capsule, not an amoeba */
     ctx.fillStyle = bodyGrad("sporeBody", r, "rgb(" + shade(c, 1.25, .3, [255, 255, 255]) + ")", "rgb(" + shade(c, .5) + ")");
-    blob(r * .92, .07, w * 1.4, 18); ctx.fill(); outline(r, c);
-    /* cap */
+    polyPath(r * .92, 8, w * .3); ctx.fill(); outline(r, c);
+    /* cap plate */
     ctx.fillStyle = "rgb(" + shade(c, .62) + ")";
     ctx.beginPath();
     ctx.moveTo(-r * .95, -r * .18);
     ctx.quadraticCurveTo(-r * .1, -r * 1.5, r * .95, -r * .18);
     ctx.quadraticCurveTo(0, -r * .48, -r * .95, -r * .18);
     ctx.closePath(); ctx.fill();
-    ctx.fillStyle = "rgba(" + shade(c, 1.4, .5, [255, 255, 255]) + ",.75)";
+    /* status-light strip, not mushroom spots */
     for (let i = 0; i < 4; i++) {
       const a = -2.5 + i * .6;
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * r * .62, Math.sin(a) * r * .62 - r * .2, r * .12 + (i % 2) * r * .04, 0, TAU);
-      ctx.fill();
+      ctx.fillStyle = "rgba(" + shade(c, 1.4, .5, [255, 255, 255]) + "," + (.5 + .3 * Math.sin(G.time * 3 + i)) + ")";
+      rrect(Math.cos(a) * r * .62 - r * .05, Math.sin(a) * r * .62 - r * .24, r * .1, r * .08, r * .02); ctx.fill();
     }
-    /* face */
-    for (const sgn of [-1, 1]) {
-      faceEye(r * .3, sgn * r * .24, r * .19, 0, "rgb(" + shade(c, .3, .3, [20, 40, 30]) + ")",
-        { blink: e.blink * .8, sclera: "rgba(255,255,250,.9)" });
-    }
-    ctx.fillStyle = "rgba(" + shade(c, .3) + ",.8)";
-    ctx.beginPath(); ctx.ellipse(r * .42, 0, r * .1, r * .16, 0, 0, TAU); ctx.fill();
-    /* sporelings clinging to its back — the ones that pop out on death */
+    /* forward sensor band, no eyes */
+    visor(r * .35, 0, r * .1, r * .3, shade(c, .3, .3, [20, 40, 30]), .8, Math.PI / 2);
+    /* docked fragment modules — the pieces it splits into on death */
     for (let i = 0; i < 3; i++) {
       const a = 2.1 + i * .55 + Math.sin(w + i) * .1;
       ctx.save();
       ctx.translate(Math.cos(a) * r * .78, Math.sin(a) * r * .72);
       ctx.fillStyle = "rgba(" + shade(c, 1.15, .2, [255, 255, 255]) + ",.92)";
-      ctx.beginPath(); ctx.arc(0, 0, r * .21, 0, TAU); ctx.fill();
-      ctx.fillStyle = "rgba(20,30,24,.8)";
-      ctx.beginPath(); ctx.arc(-r * .05, 0, r * .06, 0, TAU); ctx.fill();
+      rrect(-r * .18, -r * .18, r * .36, r * .36, r * .1); ctx.fill();
       ctx.restore();
     }
     ctx.restore();
   },
 
-  /* ---- MOTE — a tiny gremlin with one huge eye and buzzing wings -------- */
+  /* ---- MOTE — a splinter drone with a blinking nav-strobe --------------- */
   mote(e, c) {
     const r = e.r;
     ctx.rotate(e.ang);
@@ -400,9 +336,11 @@ const ART = {
     ctx.globalAlpha = 1;
     ctx.fillStyle = "rgba(" + shade(c, .8) + ",.5)";
     tri(-r * 2.2, 0, 0, r * .45, 0, -r * .45); ctx.fill();
-    fillBody(r, c, "moteBody");
-    ctx.beginPath(); ctx.arc(0, 0, r, 0, TAU); ctx.fill();
-    faceEye(r * .28, 0, r * .55, 0, "rgb(" + shade(c, .3, .3, [30, 50, 40]) + ")", { blink: e.blink, slit: 1 });
+    /* angular shard hull, not a round face */
+    ctx.fillStyle = "rgb(" + shade(c, 1.2, .3, [255, 255, 255]) + ")";
+    ctx.beginPath();
+    ctx.moveTo(r * 1.05, 0); ctx.lineTo(0, r * .78); ctx.lineTo(-r * .7, 0); ctx.lineTo(0, -r * .78);
+    ctx.closePath(); ctx.fill(); outline(r, c);
     for (const sgn of [-1, 1]) {
       ctx.strokeStyle = "rgb(" + shade(c, .5) + ")"; ctx.lineWidth = 1.2; ctx.lineCap = "round";
       ctx.beginPath();
@@ -410,6 +348,11 @@ const ART = {
       ctx.lineTo(-r * .8, sgn * r * 1.1);
       ctx.stroke();
     }
+    /* nav-strobe — blinks, does not look at anything */
+    const strobe = Math.max(0, Math.sin(G.time * 10 + e.wob)) ** 4;
+    ctx.fillStyle = "rgba(" + shade(c, .3, .3, [30, 50, 40]) + "," + (.4 + strobe * .6) + ")";
+    ctx.beginPath(); ctx.arc(r * .15, 0, r * .22, 0, TAU); ctx.fill();
+    if (strobe > .5) glowPool(r * .15, 0, r * .6, c, strobe * .3);
   },
 
   /* ---- BULWARK — a barrier drone projecting a hard-light riot shield ---- */
@@ -565,6 +508,9 @@ const ART = {
     const band = ((G.time * 90 + e.wob * 40) % (r * 3)) - r * 1.5;
     ctx.fillRect(-r * 1.2, band, r * 2.8, 1.4);
     ctx.restore();
+    /* a stuttering timestamp readout — corrupted playback, not a clean clock */
+    const stutter = ((G.time * 3.7 + e.wob) | 0) % 2 === 0 ? (G.time * 1.9) % 1 : ((G.time * 1.9) % 1 * .3);
+    clockTick(r * .3, -r * .55, r * .16, stutter, shade(c, 1.3, .3, [255, 255, 255]), 6);
     ctx.globalAlpha = .35;
     ctx.fillStyle = "rgb(" + c + ")";
     ctx.beginPath(); ctx.ellipse(-r * 1.25, 0, r * .5, r * .22, 0, 0, TAU); ctx.fill();
@@ -608,13 +554,21 @@ const ART = {
     visor(r * .35, 0, r * .1, r * .5, "255,255,255", .9, Math.PI / 2);
     ctx.fillStyle = "rgba(" + TH.rim + ",.85)";
     ctx.beginPath(); ctx.arc(0, 0, r * .18, 0, TAU); ctx.fill();
+    /* a counter-rotating time-echo halo — it holds the position opposite yours */
+    ctx.save();
+    ctx.rotate(-G.time * .6);
+    ctx.strokeStyle = "rgba(" + c + ",.4)"; ctx.lineWidth = 1;
+    ctx.setLineDash([3, 7]);
+    ctx.beginPath(); ctx.arc(0, 0, r * 1.7, 0, TAU); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
   },
 
-  /* ---- WARDEN — a jailer that hooks you and refuses to let go ----------- */
+  /* ---- WARDEN — a containment drone with a graviton tether -------------- */
   warden(e, c) {
     const r = e.r, w = e.wob;
     const dark = "rgb(" + shade(c, .3) + ")", mid = "rgb(" + shade(c, .62) + ")";
-    /* the chain, drawn out to whatever it has caught */
+    /* the tether, drawn out to whatever it has caught */
     if (e.state === 2 && G.player) {
       ctx.save();
       ctx.globalAlpha = .9;
@@ -622,8 +576,17 @@ const ART = {
       ctx.restore();
     }
     ctx.save(); ctx.rotate(e.ang);
-    /* heavy robe, no legs */
-    hem(r * 1.05, w * .6, 2.4, "rgba(" + shade(c, .26) + ",.95)", 9, .12);
+    /* containment skirt — rigid radiator blades, not cloth */
+    ctx.save(); ctx.rotate(Math.PI);
+    for (let i = 0; i < 7; i++) {
+      const a = -1.2 + (2.4 / 6) * i;
+      ctx.save(); ctx.rotate(a);
+      ctx.globalAlpha = .85;
+      plate(r * .3, -r * .07, r * .95, r * .14, r * .06, "rgba(" + shade(c, .3) + ",.9)");
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+    ctx.restore();
     /* shoulder yoke */
     for (const sgn of [-1, 1]) {
       ctx.save();
@@ -631,10 +594,7 @@ const ART = {
       ctx.rotate(sgn * .3);
       plate(-r * .38, -r * .26, r * .8, r * .52, r * .24, mid, "rgba(255,255,255,.25)");
       ctx.fillStyle = dark;
-      for (let k = 0; k < 3; k++) {
-        tri(-r * .2 + k * r * .24, -r * .26, -r * .06 + k * r * .24, -r * .26, -r * .13 + k * r * .24, -r * .56);
-        ctx.fill();
-      }
+      for (let k = 0; k < 3; k++) ctx.fillRect(-r * .22 + k * r * .24, -r * .1, r * .14, r * .2);
       ctx.restore();
     }
     /* body */
@@ -645,13 +605,13 @@ const ART = {
     ctx.quadraticCurveTo(-r * .3, r * .95, -r * .7, 0);
     ctx.quadraticCurveTo(-r * .3, -r * .95, r * .58, -r * .62);
     ctx.closePath(); ctx.fill(); outline(r, c);
-    /* shackle rings across the chest */
+    /* containment field rings across the hull */
     ctx.strokeStyle = "rgba(" + shade(c, 1.4, .4, [255, 255, 255]) + ",.7)";
     ctx.lineWidth = 1.8;
     for (let i = -1; i <= 1; i++) {
       ctx.beginPath(); ctx.ellipse(r * .05, i * r * .34, r * .22, r * .12, 0, 0, TAU); ctx.stroke();
     }
-    /* hooded head with a lamp for a face */
+    /* head — a forward optic ring, no hood, no face */
     ctx.save();
     ctx.translate(r * .46, 0);
     ctx.fillStyle = dark;
@@ -662,34 +622,28 @@ const ART = {
     ctx.quadraticCurveTo(r * .3, -r * .48, r * .46, 0);
     ctx.closePath(); ctx.fill();
     const lamp = e.state === 2 ? 1 : e.state === 1 ? .7 : .4;
-    glowPool(r * .18, 0, r * .5, c, lamp * .3);
-    ctx.fillStyle = "rgba(" + shade(c, 1.5, .45, [255, 255, 255]) + "," + (.5 + lamp * .4) + ")";
-    ctx.beginPath(); ctx.arc(r * .18, 0, r * .11, 0, TAU); ctx.fill();
-    ctx.strokeStyle = "rgba(" + shade(c, 1.2, .3, [255, 255, 255]) + ",.8)"; ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.arc(r * .18, 0, r * .2, 0, TAU); ctx.stroke();
-    ctx.fillStyle = "rgba(10,10,20,.8)";
-    ctx.beginPath(); ctx.ellipse(r * .2, 0, r * .05, r * .14, 0, 0, TAU); ctx.fill();
+    optic(r * .18, 0, r * .22, c, lamp, 0);
     ctx.restore();
-    /* the hook arm */
+    /* the tether arm, ending in a clamp instead of a hook */
     ctx.save();
     ctx.translate(r * .3, r * .95);
     ctx.rotate(.5 + Math.sin(w) * .1 - (e.state ? .8 : 0));
     ctx.strokeStyle = mid; ctx.lineWidth = 3.4; ctx.lineCap = "round";
     ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(r * .7, 0); ctx.stroke();
-    ctx.strokeStyle = "rgb(" + shade(c, 1.35, .4, [255, 255, 255]) + ")";
-    ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.arc(r * .85, r * .18, r * .3, -1.4, 2.1); ctx.stroke();
+    ctx.strokeStyle = "rgb(" + shade(c, 1.35, .4, [255, 255, 255]) + ")"; ctx.lineWidth = 2.6;
+    ctx.beginPath(); ctx.moveTo(r * .7, 0); ctx.lineTo(r * .95, -r * .18); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(r * .7, 0); ctx.lineTo(r * .95, r * .18); ctx.stroke();
     ctx.restore();
     rimLight(r);
     ctx.restore();
   },
 
-  /* ---- REVENANT — a blinking reaper that cleaves where you were ---------- */
+  /* ---- REVENANT — a phase-cutter drone with a spinning blade rotor ------ */
   revenant(e, c) {
     const r = e.r, w = e.wob;
     const swing = e.state === 1 ? clamp(1 - e.timer / .62, 0, 1) : 0;
     const dark = "rgb(" + shade(c, .26) + ")";
-    /* it doesn't stand on anything — smoke instead of legs */
+    /* it doesn't stand on anything — a chronofield haze instead of legs */
     ctx.save();
     ctx.globalAlpha = .5;
     for (let i = 0; i < 4; i++) {
@@ -699,9 +653,16 @@ const ART = {
     ctx.restore();
     ctx.save();
     ctx.rotate(e.ang);
-    /* cloak */
+    /* trailing containment vanes, not cloth */
     ctx.save(); ctx.rotate(Math.PI);
-    hem(r * 1.1, w, 2.5, "rgba(" + shade(c, .3) + ",.92)", 9, .22);
+    for (let i = 0; i < 7; i++) {
+      const a = -1.25 + (2.5 / 6) * i;
+      ctx.save(); ctx.rotate(a);
+      ctx.globalAlpha = .85;
+      plate(r * .32, -r * .06, r * 1.0, r * .12, r * .05, "rgba(" + shade(c, .32) + ",.9)");
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
     ctx.restore();
     ctx.fillStyle = bodyGrad("revBody", r, "rgb(" + shade(c, 1.1, .22, [255, 255, 255]) + ")", "rgb(" + shade(c, .34) + ")");
     ctx.beginPath();
@@ -710,27 +671,20 @@ const ART = {
     ctx.quadraticCurveTo(-r * .35, r * .95, -r * .72, 0);
     ctx.quadraticCurveTo(-r * .35, -r * .95, r * .5, -r * .6);
     ctx.closePath(); ctx.fill(); outline(r, c);
-    /* skull mask */
+    /* faceless bladed hull — one warning optic, no skull, no fangs */
     ctx.save();
     ctx.translate(r * .42, 0);
-    ctx.fillStyle = "rgb(" + shade(c, 1.4, .68, [255, 250, 250]) + ")";
+    ctx.fillStyle = "rgb(" + shade(c, .5) + ")";
     ctx.beginPath();
     ctx.moveTo(r * .48, 0);
     ctx.quadraticCurveTo(r * .3, r * .42, -r * .1, r * .34);
     ctx.quadraticCurveTo(-r * .34, 0, -r * .1, -r * .34);
     ctx.quadraticCurveTo(r * .3, -r * .42, r * .48, 0);
     ctx.closePath(); ctx.fill();
-    for (const sgn of [-1, 1]) {
-      ctx.fillStyle = "rgba(12,6,20,.9)";
-      ctx.beginPath(); ctx.ellipse(r * .12, sgn * r * .18, r * .13, r * .1, sgn * .35, 0, TAU); ctx.fill();
-      ctx.fillStyle = "rgb(" + shade(c, 1.5, .3, [255, 255, 255]) + ")";
-      ctx.beginPath(); ctx.arc(r * .14, sgn * r * .18, r * .05, 0, TAU); ctx.fill();
-    }
-    fangs(r * .18, r * .34, r * .4, 4, r * .1, "rgba(" + shade(c, .3) + ",.85)", 0);
-    for (const sgn of [-1, 1]) horn(r * .1, sgn * r * .32, sgn * 1.5, r * .62, r * .16,
-      "rgb(" + shade(c, 1.2, .35, [255, 255, 255]) + ")", 1.1);
+    visor(r * .16, 0, r * .1, r * .38, shade(c, 1.4, .35, [255, 255, 255]), .55 + swing * .45, Math.PI / 2);
+    if (swing > 0) clockTick(r * .16, 0, r * .3, swing, shade(c, 1.4, .35, [255, 255, 255]), 6);
     ctx.restore();
-    /* scythe — sweeps through the cleave */
+    /* mono-blade rotor — sweeps through the cleave */
     ctx.save();
     ctx.rotate(-1.5 + swing * 3.0);
     ctx.strokeStyle = "rgb(" + shade(c, .55) + ")"; ctx.lineWidth = 3.2; ctx.lineCap = "round";
@@ -750,16 +704,16 @@ const ART = {
     ctx.restore();
   },
 
-  /* ---- HOWITZER — an artillery beetle that shells the floor ------------- */
+  /* ---- HOWITZER — a siege platform that shells the floor ---------------- */
   howitzer(e, c) {
     const r = e.r, w = e.wob;
     const dark = "rgb(" + shade(c, .32) + ")", mid = "rgb(" + shade(c, .68) + ")";
     const kick = e.state === 1 ? clamp(1 - e.timer / 1.15, 0, 1) : 0;
     ctx.save(); ctx.rotate(e.ang);
-    /* four crab legs */
+    /* landing struts */
     for (const sgn of [-1, 1]) {
       for (let i = 0; i < 2; i++) {
-        limb(-r * .2 + i * r * .45, sgn * r * .55, r * .85,
+        strut(-r * .2 + i * r * .45, sgn * r * .55, r * .85,
           Math.PI * (sgn > 0 ? .5 : 1.5) + (i ? -.4 : .4) * (sgn > 0 ? 1 : -1),
           Math.sin(w * 1.6 + i * 2 + (sgn > 0 ? 0 : Math.PI)) * .3, dark, 3);
       }
@@ -782,13 +736,12 @@ const ART = {
     rrect(r * 1.05, -r * .38, r * .28, r * .76, r * .1); ctx.fill();
     if (kick > 0) glowPool(r * 1.35, 0, r * (.7 + kick), "255,210,140", kick * .45);
     ctx.restore();
-    /* head with a targeting eye */
+    /* head — a scanner optic, not a targeting eye */
     ctx.save();
     ctx.translate(r * .82, 0);
     ctx.fillStyle = mid;
     rrect(-r * .28, -r * .3, r * .66, r * .6, r * .2); ctx.fill();
-    faceEye(r * .12, 0, r * .24, 0, "rgb(" + shade(c, 1.3, .25, [255, 90, 60]) + ")",
-      { slit: 1, blink: e.blink, brow: dark, angry: 1 });
+    optic(r * .04, 0, r * .22, shade(c, 1.3, .25, [255, 90, 60]), 1, 0);
     ctx.strokeStyle = "rgba(" + shade(c, 1.4, .4, [255, 255, 255]) + ",.6)";
     ctx.lineWidth = 1.1;
     ctx.beginPath(); ctx.arc(r * .12, 0, r * .42, -1, 1); ctx.stroke();
@@ -832,10 +785,9 @@ const ART = {
     ctx.beginPath(); ctx.ellipse(0, 0, r * 1.15, r * .5, 0, 0, TAU); ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
-    /* body — a floating cowl around one big eye */
+    /* body — a hard dome housing the central lens */
     ctx.save();
     ctx.rotate(e.ang);
-    hem(r * .82, w, 1.8, "rgba(" + shade(c, .3) + ",.9)", 6, .18);
     ctx.fillStyle = bodyGrad("hexBody", r, "rgb(" + shade(c, 1.2, .28, [255, 255, 255]) + ")", "rgb(" + shade(c, .42) + ")");
     ctx.beginPath();
     ctx.moveTo(r * .55, -r * .55);
@@ -843,10 +795,7 @@ const ART = {
     ctx.quadraticCurveTo(-r * .4, r * .8, -r * .62, 0);
     ctx.quadraticCurveTo(-r * .4, -r * .8, r * .55, -r * .55);
     ctx.closePath(); ctx.fill(); outline(r, c);
-    ctx.fillStyle = "rgba(10,6,18,.8)";
-    ctx.beginPath(); ctx.ellipse(r * .2, 0, r * .38, r * .44, 0, 0, TAU); ctx.fill();
-    faceEye(r * .26, 0, r * .3, 0, "rgb(" + shade(c, 1.4, .3, [255, 255, 255]) + ")",
-      { slit: 1, blink: casting ? 1 : e.blink, sclera: "rgba(" + shade(c, .9) + ",.95)" });
+    optic(r * .2, 0, r * .4, shade(c, 1.4, .3, [255, 255, 255]), casting ? 1 : .3, w);
     if (casting) {
       ctx.globalAlpha = .5 + Math.sin(G.time * 20) * .3;
       glowPool(r * .26, 0, r * 1.1, c, .4);
@@ -855,25 +804,21 @@ const ART = {
     ctx.restore();
   },
 
-  /* ---- BROODMOTHER — a swollen queen that keeps making more ------------- */
+  /* ---- BROODMOTHER — a fabricator core that keeps making more ----------- */
   broodmother(e, c) {
     const r = e.r, w = e.wob;
     const birth = clamp(e.birth || 0, 0, 1);
     const dark = "rgb(" + shade(c, .32) + ")", mid = "rgb(" + shade(c, .62) + ")";
     ctx.save(); ctx.rotate(e.ang);
-    /* eight legs */
+    /* eight docking struts */
     for (const sgn of [-1, 1]) {
       for (let i = 0; i < 4; i++) {
         const base = Math.PI * (sgn > 0 ? .5 : 1.5) + (i - 1.5) * .38 * (sgn > 0 ? 1 : -1);
         const sw = Math.sin(w * 1.5 + i * 1.2 + (sgn > 0 ? 0 : 2)) * .38;
-        limb(r * .1, sgn * r * .3, r * 1.25, base, sw, mid, 3.4);
-        ctx.fillStyle = dark;
-        ctx.beginPath();
-        ctx.arc(r * .1 + Math.cos(base + sw) * r * 1.4, sgn * r * .3 + Math.sin(base + sw) * r * 1.4, r * .1, 0, TAU);
-        ctx.fill();
+        strut(r * .1, sgn * r * .3, r * 1.25, base, sw, mid, 3.4);
       }
     }
-    /* egg sac */
+    /* gestation rack — modular fragment pods, not an egg sac */
     ctx.fillStyle = bodyGrad("broodSac", r, "rgb(" + shade(c, 1.3, .4, [255, 255, 255]) + ")", "rgb(" + shade(c, .5) + ")");
     ctx.beginPath();
     ctx.ellipse(-r * .58, 0, r * .85 * (1 + birth * .12), r * .78 * (1 + birth * .1), 0, 0, TAU);
@@ -881,33 +826,25 @@ const ART = {
     for (let i = 0; i < 5; i++) {
       const a = w * .4 + i * 1.26;
       const ex = -r * .58 + Math.cos(a) * r * .42, ey = Math.sin(a) * r * .38;
+      ctx.save(); ctx.translate(ex, ey); ctx.rotate(a);
       ctx.fillStyle = "rgba(" + shade(c, 1.5, .5, [255, 255, 255]) + "," + (.5 + birth * .5) + ")";
-      ctx.beginPath(); ctx.ellipse(ex, ey, r * .17, r * .21, a, 0, TAU); ctx.fill();
-      ctx.fillStyle = "rgba(20,32,24,.7)";
-      ctx.beginPath(); ctx.arc(ex, ey, r * .07, 0, TAU); ctx.fill();
+      rrect(-r * .13, -r * .17, r * .26, r * .34, r * .08); ctx.fill();
+      ctx.restore();
     }
     if (birth > 0) glowPool(-r * .58, 0, r * 1.5, c, birth * .45);
     /* thorax */
     ctx.fillStyle = mid;
     ctx.beginPath(); ctx.ellipse(r * .15, 0, r * .5, r * .44, 0, 0, TAU); ctx.fill();
-    /* head with mandibles and a cluster of eyes */
+    /* head — a status/output light array, no mandibles, no eyes */
     ctx.save();
     ctx.translate(r * .72, 0);
     ctx.fillStyle = bodyGrad("broodHead", r * .5, "rgb(" + shade(c, 1.2, .25, [255, 255, 255]) + ")", "rgb(" + shade(c, .45) + ")");
     ctx.beginPath(); ctx.ellipse(0, 0, r * .42, r * .38, 0, 0, TAU); ctx.fill();
     for (const sgn of [-1, 1]) {
-      ctx.strokeStyle = "rgb(" + shade(c, 1.25, .45, [255, 255, 250]) + ")";
-      ctx.lineWidth = 2.6; ctx.lineCap = "round";
-      ctx.beginPath();
-      ctx.moveTo(r * .2, sgn * r * .22);
-      ctx.quadraticCurveTo(r * .72, sgn * r * .42, r * .82, sgn * r * .02);
-      ctx.stroke();
-    }
-    for (const sgn of [-1, 1]) {
-      faceEye(r * .1, sgn * r * .18, r * .15, 0, "rgb(" + shade(c, .3, .3, [10, 30, 20]) + ")", { blink: e.blink, slit: 1 });
-      ctx.fillStyle = "rgba(" + shade(c, .28) + ",.9)";
-      ctx.beginPath(); ctx.arc(-r * .1, sgn * r * .3, r * .07, 0, TAU); ctx.fill();
-      ctx.beginPath(); ctx.arc(-r * .2, sgn * r * .12, r * .06, 0, TAU); ctx.fill();
+      for (let k = 0; k < 2; k++) {
+        ctx.fillStyle = "rgba(" + shade(c, 1.25, .45, [255, 255, 250]) + "," + (.5 + .5 * Math.sin(G.time * 4 + k + sgn)) + ")";
+        ctx.beginPath(); ctx.arc(r * .1 + k * r * .14, sgn * r * .2, r * .07, 0, TAU); ctx.fill();
+      }
     }
     ctx.restore();
     rimLight(r);
@@ -940,7 +877,7 @@ const ART = {
       polyPath(7 + ph * 1.5, 3, 0); ctx.fill();
       ctx.restore();
     }
-    /* four arms reaching out of the cloak */
+    /* four manipulator struts, no claws */
     for (let i = 0; i < 4; i++) {
       const sgn = i < 2 ? -1 : 1, k = i % 2;
       const a = sgn * (.8 + k * .5) + Math.sin(G.time * 1.4 + i) * .12;
@@ -952,14 +889,24 @@ const ART = {
       ctx.moveTo(r * .3, 0);
       ctx.quadraticCurveTo(r * .9, r * .2, r * (1.25 + k * .2), 0);
       ctx.stroke();
-      claw(r * (1.25 + k * .2), 0, 0, r * .38, "rgb(" + shade(c, 1.3, .35, [255, 255, 255]) + ")", 2.4);
+      ctx.save(); ctx.translate(r * (1.25 + k * .2), 0);
+      ctx.fillStyle = "rgb(" + shade(c, 1.3, .35, [255, 255, 255]) + ")";
+      rrect(-r * .06, -r * .16, r * .3, r * .32, r * .08); ctx.fill();
+      ctx.restore();
       ctx.restore();
     }
-    /* cloak + body */
+    /* hard chassis, no cloak */
     ctx.save();
     ctx.rotate(e.ang);
     ctx.save(); ctx.rotate(Math.PI);
-    hem(r * 1.0, sp, 2.6, "rgba(" + shade(c, .22) + ",.95)", 11, .14);
+    for (let i = 0; i < 9; i++) {
+      const a = -1.3 + (2.6 / 8) * i;
+      ctx.save(); ctx.rotate(a);
+      ctx.globalAlpha = .82;
+      plate(r * .3, -r * .07, r * 1.05, r * .14, r * .06, "rgba(" + shade(c, .22) + ",.95)");
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
     ctx.restore();
     ctx.fillStyle = bodyGrad("paradoxBody", r, "rgb(" + shade(c, 1.2, .25, [255, 255, 255]) + ")", "rgb(" + shade(c, .34) + ")");
     polyPath(r, 6, 0); ctx.fill();
@@ -979,7 +926,7 @@ const ART = {
     ctx.lineTo(Math.cos(-sp * 2.2) * r * .44, Math.sin(-sp * 2.2) * r * .44); ctx.stroke();
     ctx.beginPath(); ctx.moveTo(0, 0);
     ctx.lineTo(Math.cos(sp * .7) * r * .3, Math.sin(sp * .7) * r * .3); ctx.stroke();
-    /* hood full of eyes — one opens per phase */
+    /* phase core — a segmented ring that fills in per phase, no eyes */
     ctx.save();
     ctx.translate(r * .52, 0);
     ctx.fillStyle = dark;
@@ -990,14 +937,13 @@ const ART = {
     ctx.quadraticCurveTo(r * .34, -r * .52, r * .5, 0);
     ctx.closePath(); ctx.fill();
     const pc = ["255,120,160", "255,180,120", "255,90,90"][ph] || "255,120,160";
-    faceEye(r * .18, 0, r * .2, 0, "rgb(" + pc + ")", { slit: 1, blink: 1 });
+    optic(r * .1, 0, r * .2, pc, 1, 0);
     for (let i = 0; i <= ph; i++) {
-      for (const sgn of [-1, 1]) {
-        ctx.fillStyle = "rgb(" + pc + ")";
-        ctx.beginPath();
-        ctx.ellipse(r * (.02 - i * .14), sgn * r * (.24 + i * .1), r * .08, r * .05, sgn * .4, 0, TAU);
-        ctx.fill();
-      }
+      const a = -Math.PI / 2 + (i / 3) * TAU;
+      ctx.strokeStyle = "rgb(" + pc + ")"; ctx.lineWidth = 2.4; ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.arc(0, 0, r * .32, a - .5, a + .5);
+      ctx.stroke();
     }
     ctx.restore();
     ctx.restore();
