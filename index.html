@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>One Second Ahead</title>
+<link rel="stylesheet" href="css/style.css" />
+</head>
+<body data-theme="dark">
+<div id="app">
+  <canvas id="game"></canvas>
+  <div class="film vignette"></div>
+  <div class="film grain"></div>
+  <div class="film scan"></div>
+
+  <div id="hud">
+    <div class="hud-tl">
+      <div class="lvl-line"><b id="lvlNum">Level 1</b><em id="lvlName">the shallows</em></div>
+      <div class="dots" id="waveDots"></div>
+    </div>
+    <div class="hud-tr"><div class="score" id="scoreVal">0</div></div>
+    <div class="hud-bl">
+      <div class="surge"><i id="surgeFill"></i></div>
+      <div class="integrity" id="intBar"><i class="ghost" id="hpGhost"></i><i class="fill" id="hpFill"></i></div>
+      <div class="int-label">integrity <b id="hpNum">100</b><span id="shieldPips"></span></div>
+    </div>
+    <div class="hud-br" id="abilities"></div>
+    <div id="waveBanner"></div>
+  </div>
+
+  <div id="touch">
+    <button class="tbtn dash" data-act="dash">DASH</button>
+    <button class="tbtn echo" data-act="echo">ECHO</button>
+  </div>
+  <div id="toast"></div>
+  <button id="opsLink" title="facility access">◈ operator</button>
+
+  <section class="screen" id="boot">
+    <div class="term">
+      <div class="term-head"><b>Quantum Stress Chamber 09</b><span id="bootLink">diagnostic bus · carrier unstable</span></div>
+      <div class="term-body" id="bootBody"></div>
+      <div class="bar"><i id="bootBar"></i></div>
+      <div class="term-foot"><span id="bootFoot">CHRONO-01 · cold start</span><span><i class="k">Any key</i> skip</span></div>
+    </div>
+  </section>
+
+  <section class="screen" id="home">
+    <div class="wordmark">
+      <span class="ghost a"><span class="l1">ONE SECOND</span><span class="l2">AHEAD</span></span>
+      <span class="ghost b"><span class="l1">ONE SECOND</span><span class="l2">AHEAD</span></span>
+      <span class="l1">ONE SECOND</span><span class="l2">AHEAD</span>
+      <p class="tagline">You are CHRONO-01, sealed in Chamber 09 while the Concordance runs its entropy purge. The chamber is a splice head: it can be tuned to any branch the facility ever pruned. Dash through trouble, leave a decoy to take the hit meant for you, and swap places with it when the room closes.</p>
+    </div>
+    <div></div>
+    <div class="bottom">
+      <nav class="menu" id="mainMenu">
+        <button class="menu-item sel" data-go="play"><i class="glyph"></i><span class="label">Branches<small class="sub" id="menuPlaySub">Five timelines, one hull</small></span><span class="k">Enter</span></button>
+        <button class="menu-item" data-go="survival"><i class="glyph"></i><span class="label">Survival<small class="sub" id="menuSurvSub">Endless waves, nothing to reach</small></span><span class="k">V</span></button>
+        <button class="menu-item" data-go="shop"><i class="glyph"></i><span class="label">Echo Lab<small class="sub" id="menuShards">Permanent upgrades</small></span><span class="k">L</span></button>
+        <button class="menu-item" data-go="guide"><i class="glyph"></i><span class="label">How to play<small class="sub">Two buttons, everything else is timing</small></span><span class="k">H</span></button>
+        <button class="menu-item" data-go="archive"><i class="glyph"></i><span class="label">The Archive<small class="sub" id="menuArcSub">Lore, secrets, bestiary</small></span><span class="k">A</span></button>
+        <button class="menu-item" data-go="cine"><i class="glyph"></i><span class="label">Cold open<small class="sub">Replay the cinematic</small></span><span class="k">B</span></button>
+        <button class="menu-item" data-go="settings"><i class="glyph"></i><span class="label">Settings<small class="sub">Sound, light, effects</small></span><span class="k">S</span></button>
+      </nav>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:16px">
+        <button class="themeSwap" id="themeSwap"><i></i><span>Daylight</span></button>
+        <div class="records">
+          <div class="rec"><b id="recLevel">—</b><span>furthest level</span></div>
+          <div class="rec"><b id="recWave">—</b><span>best wave</span></div>
+          <div class="rec"><b id="recScore">—</b><span>best score</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="cine">
+    <canvas id="cineCanvas"></canvas>
+    <div class="cine-bars"><i></i><i></i></div>
+    <div id="cineCapWrap"><b id="cineCap"></b><span id="cineSub"></span></div>
+    <div id="cineSkip"><i class="k">Any key</i> skip</div>
+  </section>
+
+  <section class="screen" id="timelines">
+    <div class="scrim"></div>
+    <div class="panel wide">
+      <div class="panel-head">
+        <div><h2>Branch archive</h2><p>Five recorded timelines. Chamber 09 is the baseline; the rest were pruned and filed. Each one runs its own physics, its own inhabitants and its own way of ending.</p></div>
+      </div>
+      <div class="tl-body" id="tlList"></div>
+      <div class="panel-foot">
+        <div class="keys"><span><i class="k">Esc</i> back</span></div>
+        <button class="btn" data-go="home">Back to menu</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="archive">
+    <div class="scrim"></div>
+    <div class="panel wide">
+      <div class="panel-head">
+        <div><h2>The Archive</h2><p>Everything the facility wrote down, everything it redacted, and the eight things it never wrote down at all.</p></div>
+      </div>
+      <div class="arc-wrap"><div class="rail" id="arcRail"></div><div class="arc-body" id="arcBody"></div></div>
+      <div class="panel-foot">
+        <div class="keys"><span><i class="k">Esc</i> back</span></div>
+        <button class="btn" data-go="home">Back to menu</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="admin">
+    <div class="scrim"></div>
+    <div class="panel wide">
+      <div class="panel-head">
+        <div><h2>Operator console</h2><p>Facility-side access. Everything below bypasses the normal unlock path.</p></div>
+      </div>
+      <div id="admGate" class="adm-gate">
+        <div class="adm-gate-in">
+          <b>Authorisation required</b>
+          <p>Chamber 09 accepts one operator code. It is stencilled on the hull and it appears in the boot log every single time.</p>
+          <input id="admCode" type="password" autocomplete="off" spellcheck="false" placeholder="operator code" />
+          <button class="btn primary" id="admGo">Authorise</button>
+          <span id="admErr"></span>
+        </div>
+      </div>
+      <div id="admPanel" class="adm-panel hide"></div>
+      <div class="panel-foot">
+        <div class="keys"><span><i class="k">Esc</i> back</span></div>
+        <button class="btn" data-go="home">Back to menu</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="shop">
+    <div class="scrim"></div>
+    <div class="panel">
+      <div class="panel-head">
+        <div><h2>Echo Lab</h2><p id="shopNote">Shards survive your death. Hardware, tactical modules and rendering code are all permanent once installed.</p></div>
+        <div class="balance"><i class="shard"></i><span id="shopBalance">0</span></div>
+      </div>
+      <div class="shop-body"><div class="rail" id="shopRail"></div><div class="stock" id="shopStock"></div></div>
+      <div class="panel-foot">
+        <div class="keys"><span><i class="k">Esc</i> back</span></div>
+        <button class="btn" data-go="home">Back to menu</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="guide">
+    <div class="scrim"></div>
+    <div class="panel">
+      <div class="panel-head"><div><h2>How to play</h2><p>Move, hold to fire, and time two abilities. Entropy telegraphs every heavy attack on the floor before it lands, so the whole fight is a reading exercise.</p></div></div>
+      <div class="guide-body">
+        <div>
+          <h4>Controls</h4>
+          <div class="ctrl"><span class="keys"><i class="k">W</i><i class="k">A</i><i class="k">S</i><i class="k">D</i></span><span>Move<em> — that's the whole movement layer</em></span></div>
+          <div class="ctrl"><span class="keys"><i class="k">Mouse</i></span><span>Aim<em> — the gun fires by itself and the aim snaps to what you point near</em></span></div>
+          <div class="ctrl"><span class="keys"><i class="k">Space</i></span><span>Dash<em> — damages what you pass through, and nothing can touch you mid-dash</em></span></div>
+          <div class="ctrl"><span class="keys"><i class="k">Space</i></span><span>Time-Swap<em> — with a decoy alive the same button trades places with it, and the dash steps aside</em></span></div>
+          <div class="ctrl"><span class="keys"><i class="k">E</i></span><span>Echo<em> — a decoy of your last few seconds, fighting for you</em></span></div>
+          <div class="ctrl"><span class="keys"><i class="k">T</i></span><span>Switch between night and daylight</span></div>
+          <div class="ctrl"><span class="keys"><i class="k">Esc</i></span><span>Pause</span></div>
+          <ul class="tips">
+            <li>One button does both movement abilities. No decoy on the field means dash; a decoy on the field means swap. You never have to choose under pressure.</li>
+            <li>Dash <b>through</b> a crowd rather than away from it. The invulnerable window outlasts the contact, and the dash itself hurts.</li>
+            <li>Enemies chase whatever is nearest, so an echo dropped on one side splits the room in half.</li>
+            <li>Wardens hook you and shrink the room. Kill the Warden or accept the leash — the tether ring is drawn on the floor.</li>
+            <li>Revenants arrive where you were <b>heading</b>. Change direction as they blink, not after.</li>
+            <li>Hexers rotate three beams through the whole chamber. Pick the gap early and walk with it, not against it.</li>
+            <li>Howitzer brackets on the floor are shells already in the air. The ground they land on keeps burning.</li>
+            <li>Gold-crowned enemies are elites: much tougher, and one of them will be armoured, frenzied or rigged to detonate.</li>
+            <li>Kills close together fill the gold line. When it fills, surge fires on its own — you never have to watch for it.</li>
+          </ul>
+        </div>
+        <div><h4>What's out there</h4><div class="bestiary" id="bestiary"></div></div>
+      </div>
+      <div class="panel-foot"><div class="keys"><span><i class="k">Esc</i> back</span></div><button class="btn" data-go="home">Back to menu</button></div>
+    </div>
+  </section>
+
+  <section class="screen" id="settings">
+    <div class="scrim"></div>
+    <div class="panel">
+      <div class="panel-head"><div><h2>Settings</h2><p>Saved on this machine along with your shards and upgrades.</p></div></div>
+      <div class="settings-body" id="settingsBody"></div>
+      <div class="panel-foot">
+        <div class="keys"><span><i class="k">Esc</i> back</span></div>
+        <div style="display:flex;gap:12px">
+          <button class="btn" id="wipeSave">Erase all progress</button>
+          <button class="btn" data-go="home">Back to menu</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="pause">
+    <div class="scrim"></div>
+    <div class="panel">
+      <div class="panel-head"><div><h2>Paused</h2><p id="pauseLine">Level 1</p></div></div>
+      <nav class="menu" id="pauseMenu" style="max-width:420px">
+        <button class="menu-item sel" data-go="resume"><i class="glyph"></i><span class="label">Resume<small class="sub">Back into it</small></span><span class="k">Esc</span></button>
+        <button class="menu-item" data-go="guide"><i class="glyph"></i><span class="label">How to play<small class="sub">Controls and enemies</small></span></button>
+        <button class="menu-item" data-go="settings"><i class="glyph"></i><span class="label">Settings<small class="sub">Sound and light</small></span></button>
+        <button class="menu-item" data-go="abandon"><i class="glyph"></i><span class="label">Abandon run<small class="sub">You keep the shards you've collected</small></span></button>
+      </nav>
+    </div>
+  </section>
+
+  <section class="screen" id="results">
+    <div class="scrim"></div>
+    <div class="panel">
+      <div id="newBestWrap"></div>
+      <div class="result-label" id="resultTitle">Timeline broken</div>
+      <div class="result-score" id="resultScore">0</div>
+      <div class="stat-grid">
+        <div class="stat"><b id="resLevel">1</b><span id="resLevelLabel">level reached</span></div>
+        <div class="stat"><b id="resKills">0</b><span>kills</span></div>
+        <div class="stat"><b id="resTime">0:00</b><span>survived</span></div>
+        <div class="stat"><b id="resShards" class="gold">0</b><span>shards banked</span></div>
+      </div>
+      <div class="actions">
+        <button class="btn primary" data-go="again">Run again</button>
+        <button class="btn" data-go="shop">Spend shards</button>
+        <button class="btn" data-go="home">Main menu</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="overlay" id="levelCard">
+    <div class="scrim"></div>
+    <div class="sheet">
+      <div class="eyebrow" id="lcEyebrow">Level 1</div>
+      <h3 id="lcName">The Shallows</h3>
+      <p class="hook" id="lcHook"></p>
+      <div class="newcomers" id="lcNew"></div>
+      <div class="go" id="lcGo">starting…</div>
+    </div>
+  </div>
+
+  <div class="overlay" id="draft">
+    <div class="scrim"></div>
+    <div class="sheet">
+      <div class="eyebrow" id="draftEyebrow">Level cleared</div>
+      <h3 id="draftTitle">Pick a core</h3>
+      <p class="hook">It lasts until this run ends.</p>
+      <div class="cores" id="coreList"></div>
+    </div>
+  </div>
+</div>
+<script src="js/01-engine-core.js"></script>
+<script src="js/02-content-branches.js"></script>
+<script src="js/03-render-toolkit.js"></script>
+<script src="js/04-enemy-art.js"></script>
+<script src="js/05-branch-art.js"></script>
+<script src="js/06-player-render.js"></script>
+<script src="js/07-game-state-fx.js"></script>
+<script src="js/08-run-and-player.js"></script>
+<script src="js/09-enemies-and-render.js"></script>
+<script src="js/10-branch-ai.js"></script>
+<script src="js/11-branch-physics.js"></script>
+<script src="js/12-hud-and-screens.js"></script>
+<script src="js/13-cinematic.js"></script>
+<script src="js/14-branch-shell.js"></script>
+<script src="js/15-branch-wiring.js"></script>
+</body>
+</html>
