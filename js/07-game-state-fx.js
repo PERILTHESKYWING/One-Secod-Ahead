@@ -26,6 +26,50 @@ function tierNow() {
   return G.loop * 6 + G.levelIdx + (G.wave - 1) * .3;
 }
 
+/* ---------------- feel: trauma, hit-stop, hit-flash --------------------
+   Every knob the impact feedback runs on, in one place. Trauma is a 0..1
+   pool that every hit adds to and that bleeds off on its own; the render
+   pass raises it to a power so small trauma stays subtle and only a real
+   beating throws the camera around. The *_SPIKE values below are what each
+   event puts in — raise them for more violence, lower them for calm. */
+const TRAUMA_DECAY = 6;           /* exponential bleed-off rate (approach() k, per second) */
+const TRAUMA_POW_POS = 2;         /* screen offset uses trauma^2 */
+const TRAUMA_POW_ROT = 3;         /* screen tilt uses trauma^3, so it only shows up near max */
+const TRAUMA_HIT = .035;          /* a pulse connecting — tiny alone, builds under sustained fire */
+const TRAUMA_HIT_CRIT = .16;      /* a crit landing */
+const TRAUMA_DASH_LAUNCH = .2;    /* pushing off into a dash */
+const TRAUMA_DASH_IMPACT = .15;   /* a dash going through something */
+const TRAUMA_DEATH_LIGHT = .1;    /* a small enemy coming apart */
+const TRAUMA_DEATH_HEAVY = .22;   /* a big one coming apart */
+const TRAUMA_DEATH_BOSS = .9;     /* the Paradox coming apart */
+const TRAUMA_DEATH_BOSS_BONUS = .8; /* stacked on top for any branch boss */
+const TRAUMA_HURT_MIN = .08;      /* floor for a hit the player actually feels */
+const TRAUMA_HURT_MAX = .5;       /* ceiling for one enormous hit */
+const TRAUMA_BLOCK = .2;          /* the shield eating a hit */
+
+/* Hit-stop is quoted in frames at 60fps, because that is how it reads on
+   screen: two frames is a tap, six is a stop. While it runs the sim is
+   paused outright and only the particle/ambient pass keeps moving. */
+const HITSTOP_FRAME = 1 / 60;
+const HITSTOP_LIGHT = 2 * HITSTOP_FRAME;   /* light kills, the player taking a hit */
+const HITSTOP_MEDIUM = 4 * HITSTOP_FRAME;  /* crits, dash impacts, the swap */
+const HITSTOP_HEAVY = 6 * HITSTOP_FRAME;   /* something large dying */
+/* Deliberately longer pauses for one-off beats. These are not combat juice,
+   they are punctuation, so they sit outside the 2-6 frame band on purpose.
+   Both land on moments where nothing is being asked of the player. */
+const HITSTOP_BOSS_KILL = .32;
+const HITSTOP_DEATH = .22;
+/* the chrono brake is a reaction window, not a pause — it slows the room
+   instead of stopping it, so the player can still act inside it */
+const BRAKE_SLOWMO = .32;
+
+/* A white frame over a sprite the instant it is hit. Short enough to read as
+   a flash rather than a glow. */
+const HIT_FLASH_ENEMY = 2 / 60;
+const HIT_FLASH_PLAYER = 2 / 60;
+/* how wide a directional spark spray opens around the angle of the hit */
+const BURST_CONE_SPREAD = Math.PI * .55;
+
 /* ---------------- fx --------------------------------------------------- */
 const PART_CAP = 1000;
 function part(x, y, o) {
@@ -41,6 +85,16 @@ function part(x, y, o) {
 function burst(x, y, n, col, force, opt) {
   n = Math.round(n * G.quality);
   for (let i = 0; i < n; i++) part(x, y, Object.assign({ col, s: rnd(70, 340) * (force || 1), size: rnd(1, 3.6) }, opt || {}));
+}
+/* the same spray, thrown as a cone along the angle the hit came in on, so
+   sparks come off the side that was struck instead of ringing the target */
+function directionalBurst(x, y, n, col, force, ang, opt) {
+  n = Math.round(n * G.quality);
+  const spread = opt && opt.spread != null ? opt.spread : BURST_CONE_SPREAD;
+  for (let i = 0; i < n; i++) {
+    part(x, y, Object.assign({ col, s: rnd(70, 340) * (force || 1), size: rnd(1, 3.6),
+      a: ang + rnd(-spread / 2, spread / 2) }, opt || {}));
+  }
 }
 function ring(x, y, col, r0, r1, life, w, o) {
   G.rings.push(Object.assign({ x, y, r: r0, to: r1, life: life || .4, max: life || .4, col, w: w || 2.4, wait: 0, sides: 0, rot: 0 }, o || {}));
@@ -169,10 +223,10 @@ function corpse(e, col) {
     deflect: 0, lockAng: 0, birth: 0, tether: 0, pop: 0 });
 }
 /* the moment a pulse lands three times as hard */
-function critFx(e, dmg) {
+function critFx(e, dmg, ang) {
   e.pop = 1;
   const col = TH.shard;
-  hitStop(.055); shake(.16); flash(.06, col);
+  hitStop(HITSTOP_MEDIUM); shake(TRAUMA_HIT_CRIT); flash(.06, col);
   ring(e.x, e.y, col, 4, e.r * 5.5, .3, 3);
   shock(e.x, e.y, { r0: e.r, r1: e.r * 4.6, life: .26, col, w: 3 });
   for (let i = 0; i < 2; i++) {
@@ -180,7 +234,7 @@ function critFx(e, dmg) {
     const L = e.r * 4.6;
     beam(e.x - Math.cos(a) * L, e.y - Math.sin(a) * L, e.x + Math.cos(a) * L, e.y + Math.sin(a) * L, col, .18);
   }
-  burst(e.x, e.y, 14, col, 1.5, { life: .38, size: rnd(1.4, 3.4) });
+  directionalBurst(e.x, e.y, 14, col, 1.5, ang == null ? rnd(TAU) : ang, { life: .38, size: rnd(1.4, 3.4) });
   const t = text(e.x, e.y - e.r - 8, Math.round(dmg), col, 22);
   if (t) { t.pop = 1; t.crit = 1; }
 }
@@ -333,9 +387,12 @@ function updateTraces(dt) {
           { col: tr.col, s: rnd(10, 45), a: -Math.PI / 2 + rnd(-.6, .6), life: rnd(.3, .8), size: rnd(.8, 2.1), drag: .9 });
       }
     }
-    /* chrono brake: the room crawls the moment a line finishes locking on you */
+    /* chrono brake: the room crawls the moment a line finishes locking on you.
+       This rides the slow-motion channel rather than hit-stop — the core is
+       there to hand you a window to move in, and hit-stop would freeze you
+       along with everything else. */
     if (m && m.brake && !tr.braked && (tr.dmg > 0 || tr.dot > 0) && tr.t < tr.warn && tr.warn - tr.t < .4 && p && traceHit(tr, p.x, p.y, p.r + 8)) {
-      tr.braked = 1; hitStop(.32); flash(.045, TH.echo);
+      tr.braked = 1; G.slowmo = Math.max(G.slowmo, BRAKE_SLOWMO); flash(.045, TH.echo);
       Audio_.tone({ type: "sine", freq: 1200, to: 300, dur: .3, gain: .05 });
     }
     if (tr.t > tr.warn + tr.live + tr.fade) G.traces.splice(i, 1);

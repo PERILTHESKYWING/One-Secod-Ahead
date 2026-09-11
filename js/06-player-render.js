@@ -116,6 +116,15 @@ function drawPlayer() {
     ctx.beginPath(); ctx.arc(0, 0, p.r + 13 + p.shield * 2, 0, TAU); ctx.stroke();
     ctx.restore();
   }
+  /* squash and stretch: stretched along the way the frame is being thrown,
+     pinched across it. Rotating into that axis and back leaves the body's
+     own aim rotation below untouched. */
+  const st = p.stretch || 0;
+  if (st > .01) {
+    ctx.rotate(p.stretchAng || 0);
+    ctx.scale(1 + st, 1 - st * .55);
+    ctx.rotate(-(p.stretchAng || 0));
+  }
   const pop = 1 + (p.pop || 0) * .3;
   ctx.scale(pop, pop);
   ctx.rotate(p.aim);
@@ -137,6 +146,12 @@ function drawPlayer() {
     }
   }
   heroBody(p, { kick: p.fireKick || 0, step: p.legPhase || 0 });
+  /* a white frame the instant something lands, same read as the enemies get */
+  if (p.hitFlash > 0) {
+    ctx.globalAlpha = clamp(p.hitFlash / HIT_FLASH_PLAYER, 0, 1) * .9;
+    ctx.fillStyle = "rgb(" + TH.rim + ")";
+    ctx.beginPath(); ctx.arc(0, 0, p.r * 1.12, 0, TAU); ctx.fill();
+  }
   ctx.restore();
   /* swap charge halo */
   if (p.swapFlash > 0) {

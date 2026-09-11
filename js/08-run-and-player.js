@@ -1,4 +1,37 @@
 /* Run setup, level/wave progression, survival mode, damage resolution, and player controls (fire, dash, time-swap, echo summon, movement). */
+/* ---------------- movement + impact tuning ------------------------------
+   The frame stops and starts harder than it drifts: it gets up to speed on
+   PLAYER_ACCEL and comes off it on the faster PLAYER_DECEL, which is what
+   keeps a released key from sliding. Dash and fire are buffered, so a press
+   landing just before the cooldown clears still goes off the moment it does
+   rather than being eaten. */
+const PLAYER_SPEED = 340;          /* base move speed, px/s */
+const PLAYER_ACCEL = 20;           /* approach() rate toward the stick/keys */
+const PLAYER_DECEL = 30;           /* approach() rate back to a stop — higher than accel on purpose */
+const SURGE_SPEED_MUL = 1.22;      /* move speed multiplier while surge is up */
+const DASH_INPUT_BUFFER = .12;     /* 120ms of grace on a dash/swap press */
+const FIRE_INPUT_BUFFER = .12;     /* 120ms of grace on the trigger */
+
+/* Knockback is a second velocity that decays on its own and is applied
+   before the room's walls are enforced, so nothing can be shoved through
+   one. Decay values are per-second factors, read as Math.pow(x, dt). */
+const PLAYER_KB_DECAY = .03;       /* how fast the player shrugs off a shove */
+const KNOCKBACK_PLAYER_HURT = 210; /* shove from a full-weight hit */
+const KNOCKBACK_HURT_REF = 25;     /* damage that counts as full weight; less scales down */
+const KNOCKBACK_PLAYER_BLOCK = 90; /* shove from a hit the shield eats */
+const ENEMY_KB_ON_HIT = 55;        /* flinch an enemy takes from one pulse */
+const HITSTOP_HURT_MIN_DMG = 12;   /* damage a hit needs before it stops the frame */
+
+/* Squash and stretch, driven by how hard the velocity changed this frame.
+   Measured against the real manoeuvres, the normaliser below lands roughly:
+   walking off the line ~.05, releasing the keys ~.07, slamming the opposite
+   direction ~.10. The dash sets its own value at the moment it fires, since
+   its velocity jump happens after this is sampled. */
+const SQUASH_ACCEL_NORM = 120000;  /* acceleration (px/s²) mapping to a full-scale stretch */
+const SQUASH_MAX_STRETCH = .2;     /* stretch ceiling, as a fraction of scale */
+const SQUASH_DASH_STRETCH = .2;    /* what a dash stamps on directly */
+const SQUASH_DECAY = 10;           /* approach() rate the stretch relaxes at */
+
 /* ---------------- run setup -------------------------------------------- */
 function baseMods() {
   return {
@@ -20,7 +53,8 @@ function makePlayer() {
   const maxHp = Math.round((100 + lvlOf("hp") * 15) * G.mods.hpMul);
   return {
     x: W / 2, y: H * .6, vx: 0, vy: 0, r: 13, aim: -Math.PI / 2,
-    hp: maxHp, maxHp, fireCd: 0, hurtFlash: 0, iframe: 0,
+    kb: { x: 0, y: 0 }, dashBuffer: 0, fireBuffer: 0, stretch: 0, stretchAng: -Math.PI / 2,
+    hp: maxHp, maxHp, fireCd: 0, hurtFlash: 0, hitFlash: 0, iframe: 0,
     dashMax: 1, dash: 1, dashCd: 0, dashing: 0, dashHits: null,
     echoMax: 1 + lvlOf("echoCharge"), echo: 1 + lvlOf("echoCharge"), echoCd: 0,
     surge: 0, surgeActive: 0,
@@ -278,11 +312,21 @@ function damageEnemy(e, dmg, opt) {
   if (!opt.noCrit && m.crit > 0 && chance(m.crit)) { d *= m.critMul; crit = true; }
   if (G.player && G.player.surgeActive > 0) d *= 1.5;
   if (e.armour) d *= (1 - e.armour);
-  e.hp -= d; e.hit = .12;
+  e.hp -= d; e.hit = HIT_FLASH_ENEMY;
+  /* which way the hit came in: given by the caller, or read off the impact
+     point. Area damage has neither, and keeps its old radial spray. */
+  let hitAng = opt.ang;
+  if (hitAng == null && opt.x != null && opt.y != null && (opt.x !== e.x || opt.y !== e.y))
+    hitAng = Math.atan2(e.y - opt.y, e.x - opt.x);
   if (m.execute && e.type !== "paradox" && e.hp > 0 && e.hp / e.maxHp < m.execute) e.hp = 0;
   if (m.lifesteal > 0) healPlayer(Math.min(d, 40) * m.lifesteal);
-  if (crit) critFx(e, d);
-  if (opt.spark !== false) burst(opt.x == null ? e.x : opt.x, opt.y == null ? e.y : opt.y, crit ? 9 : 4, crit ? TH.shard : ecol(EN[e.type].col), crit ? 1.3 : .7, { life: .3, size: rnd(1, 2.4) });
+  if (crit) critFx(e, d, hitAng);
+  if (opt.spark !== false) {
+    const sx = opt.x == null ? e.x : opt.x, sy = opt.y == null ? e.y : opt.y;
+    const n = crit ? 9 : 4, scol = crit ? TH.shard : ecol(EN[e.type].col), force = crit ? 1.3 : .7;
+    if (hitAng == null) burst(sx, sy, n, scol, force, { life: .3, size: rnd(1, 2.4) });
+    else directionalBurst(sx, sy, n, scol, force, hitAng, { life: .3, size: rnd(1, 2.4) });
+  }
   if (e.hp <= 0) killEnemy(e);
 }
 function killEnemy(e) {
@@ -314,8 +358,8 @@ function killEnemy(e) {
     text(e.x, e.y - e.r - 14, "salvage", TH.shard, 12);
   }
   Audio_.kill(G.combo);
-  shake(e.type === "paradox" ? .9 : e.r > 16 ? .22 : .1);
-  hitStop(e.type === "paradox" ? .32 : e.r > 16 ? .055 : .026);
+  shake(e.type === "paradox" ? TRAUMA_DEATH_BOSS : e.r > 16 ? TRAUMA_DEATH_HEAVY : TRAUMA_DEATH_LIGHT);
+  hitStop(e.type === "paradox" ? HITSTOP_BOSS_KILL : e.r > 16 ? HITSTOP_HEAVY : HITSTOP_LIGHT);
   if (e.type === "bloom") { explode(e.x, e.y, 158, 40, col); zone(e.x, e.y, 74, 3.2, 26, col); }
   if (e.type === "spore") {
     for (let i = 0; i < 3; i++) {
@@ -327,7 +371,7 @@ function killEnemy(e) {
   G.killed[e.type] = (G.killed[e.type] || 0) + 1;
   if (BRANCHFN.onKill) BRANCHFN.onKill(e);
   if (BOSSES[e.type]) {
-    G.boss = null; flash(.5, col); shake(.8);
+    G.boss = null; flash(.5, col); shake(TRAUMA_DEATH_BOSS_BONUS);
     text(e.x, e.y - 46, BOSS_EPITAPH[e.type] || "resolved", col, 22);
     if (e.type === "omega" && e.flawless) unlockSecret("zero");
     markBranchCleared();
@@ -365,19 +409,34 @@ function hurtPlayer(n, src) {
   if (!p || p.hp <= 0 || p.iframe > 0 || G.mode !== "play") return;
   if (typeof admGod !== "undefined" && admGod) return;
   if (G.boss && G.boss.type === "omega" && G.boss.phase >= 2) G.boss.flawless = 0;
+  /* the line from whatever hit you to you — knockback and sparks both ride
+     it. Hazards and the room itself have no source, and shove nothing. */
+  const hitAng = src && src.x != null ? Math.atan2(p.y - src.y, p.x - src.x) : null;
   if (p.shield > 0 && n > 4) {
     p.shield--; p.shieldCd = 11; p.iframe = .5;
     ring(p.x, p.y, TH.core, 16, 92, .4, 3);
     burst(p.x, p.y, 22, TH.core, 1.2);
-    Audio_.deflect(); shake(.2); flash(.08);
+    if (hitAng != null) { p.kb.x += Math.cos(hitAng) * KNOCKBACK_PLAYER_BLOCK; p.kb.y += Math.sin(hitAng) * KNOCKBACK_PLAYER_BLOCK; }
+    Audio_.deflect(); shake(TRAUMA_BLOCK); flash(.08);
     text(p.x, p.y - 30, "deflected", TH.core, 13);
     return;
   }
   p.hp -= n;
   p.hurtFlash = Math.min(1, p.hurtFlash + n / 26);
+  p.hitFlash = HIT_FLASH_PLAYER;
   if (n > 5) {
-    Audio_.hurt(); shake(clamp(n / 40, .08, .5)); flash(clamp(n / 90, .04, .2), "255,90,124");
-    burst(p.x, p.y, 8, "255,90,124", 1);
+    Audio_.hurt(); shake(clamp(n / 40, TRAUMA_HURT_MIN, TRAUMA_HURT_MAX)); flash(clamp(n / 90, .04, .2), "255,90,124");
+    if (hitAng == null) burst(p.x, p.y, 8, "255,90,124", 1);
+    else {
+      directionalBurst(p.x, p.y, 8, "255,90,124", 1, hitAng);
+      /* scaled by the size of the hit, so a Warden's tearing leash nudges
+         you while a Revenant's cleave actually throws you */
+      const kbMag = KNOCKBACK_PLAYER_HURT * clamp(n / KNOCKBACK_HURT_REF, .25, 1);
+      p.kb.x += Math.cos(hitAng) * kbMag; p.kb.y += Math.sin(hitAng) * kbMag;
+    }
+    /* only a real hit stops the frame — chip and tick damage never would,
+       or being tethered would stutter the whole room */
+    if (n >= HITSTOP_HURT_MIN_DMG) hitStop(HITSTOP_LIGHT);
     G.combo = 0;
   }
   if (src && G.mods.thorns > 0 && src.hp !== undefined) damageEnemy(src, G.mods.thorns, { noCrit: true });
@@ -445,6 +504,7 @@ function doRecall(c) {
   p.x = c.x; p.y = c.y; c.x = px; c.y = py;
   c.idx = 0; c.hit = .1;
   p.vx *= .18; p.vy *= .18;
+  p.kb.x *= .18; p.kb.y *= .18; /* you leave the shove behind with the position */
   p.iframe = Math.max(p.iframe, .34);
   p.swapFlash = .5;
   p.hist.push({ x: p.x, y: p.y });
@@ -464,7 +524,7 @@ function doRecall(c) {
   p.pop = 1;
   G.chroma = Math.max(G.chroma, .8);
   text(p.x, p.y - 34, "swap", TH.echo, 15);
-  Audio_.swap(); flash(.06, TH.echo); shake(.16); hitStop(.06);
+  Audio_.swap(); flash(.06, TH.echo); shake(TRAUMA_DASH_IMPACT); hitStop(HITSTOP_MEDIUM);
   if (m.swapWave > 0) {
     const R = 132 + m.swapWave * 36;
     for (const q of [{ x: p.x, y: p.y }, { x: px, y: py }]) {
@@ -473,7 +533,7 @@ function doRecall(c) {
         if (dist(e, q) < R) {
           const a = Math.atan2(e.y - q.y, e.x - q.x);
           e.kb.x += Math.cos(a) * 310; e.kb.y += Math.sin(a) * 310;
-          damageEnemy(e, 24 * m.swapWave * m.dmgMul, { noCrit: true });
+          damageEnemy(e, 24 * m.swapWave * m.dmgMul, { noCrit: true, ang: a });
         }
       }
     }
@@ -495,13 +555,16 @@ function doDash() {
   p.dashing = .17; p.iframe = .26; p.dashHits = []; p.pop = .7;
   const a = p.aim;
   p.vx = Math.cos(a) * 1180; p.vy = Math.sin(a) * 1180;
+  /* stamped here rather than inferred: this launch lands after the frame's
+     velocity delta has already been sampled, so it would otherwise be missed */
+  p.stretch = SQUASH_DASH_STRETCH; p.stretchAng = a;
   ring(p.x, p.y, TH.core, 8, 76, .32, 2.4);
   shock(p.x, p.y, { r0: 12, r1: 150, life: .3, col: TH.core, w: 5, ang: a + Math.PI, arc: 2.2 });
   burst(p.x, p.y, 18, TH.core, 1.3, { life: .34 });
   for (let i = 0; i < 3; i++) ghost(p.x - Math.cos(a) * i * 9, p.y - Math.sin(a) * i * 9, a, TH.core, { r: p.r, life: .2 + i * .05, a: .4 });
   G.chroma = Math.max(G.chroma, .45);
   if (BRANCHFN.id === "emberwake" && G.heat > .05) { G.heat = 0; Audio_.vent(); ring(p.x, p.y, "255,190,110", 10, 96, .35, 3); }
-  shake(.2, Math.cos(a), Math.sin(a)); flash(.05); Audio_.dash();
+  shake(TRAUMA_DASH_LAUNCH, Math.cos(a), Math.sin(a)); flash(.05); Audio_.dash();
   if (m.dashShock > 0) {
     const R = 150 + m.dashShock * 30;
     ring(p.x, p.y, TH.core, 12, R, .36, 3);
@@ -509,7 +572,7 @@ function doDash() {
       if (dist(e, p) < R) {
         const ang = Math.atan2(e.y - p.y, e.x - p.x);
         e.kb.x += Math.cos(ang) * 340; e.kb.y += Math.sin(ang) * 340;
-        damageEnemy(e, 26 * m.dashShock * m.dmgMul, { noCrit: true });
+        damageEnemy(e, 26 * m.dashShock * m.dmgMul, { noCrit: true, ang });
       }
     }
   }
@@ -530,8 +593,10 @@ function summonEcho() {
 }
 function updatePlayer(dt, input) {
   const p = G.player, m = G.mods;
+  const prevVx = p.vx, prevVy = p.vy;
   p.iframe = Math.max(0, p.iframe - dt);
   p.hurtFlash = Math.max(0, p.hurtFlash - dt * 2.2);
+  p.hitFlash = Math.max(0, (p.hitFlash || 0) - dt);
   p.dashing = Math.max(0, p.dashing - dt);
   p.surgeActive = Math.max(0, p.surgeActive - dt);
   p.recallCd = Math.max(0, p.recallCd - dt);
@@ -558,28 +623,54 @@ function updatePlayer(dt, input) {
       if (p.dashHits.indexOf(e) >= 0) continue;
       if (dist(e, p) < e.r + p.r + 6) {
         p.dashHits.push(e);
-        damageEnemy(e, 42 * m.dashDmgMul * m.dmgMul);
         const a = Math.atan2(e.y - p.y, e.x - p.x);
+        damageEnemy(e, 42 * m.dashDmgMul * m.dmgMul, { ang: a });
         e.kb.x += Math.cos(a) * 260; e.kb.y += Math.sin(a) * 260;
         e.pop = Math.max(e.pop || 0, .8);
         shock(e.x, e.y, { r0: e.r, r1: e.r * 3.2, life: .22, col: TH.core, w: 3 });
-        hitStop(.05); shake(.15);
+        hitStop(HITSTOP_MEDIUM); shake(TRAUMA_DASH_IMPACT);
       }
     }
   } else {
-    const sp = 340 * m.speedMul * (p.surgeActive > 0 ? 1.22 : 1);
-    p.vx = approach(p.vx, input.mx * sp, 12, dt);
-    p.vy = approach(p.vy, input.my * sp, 12, dt);
+    const sp = PLAYER_SPEED * m.speedMul * (p.surgeActive > 0 ? SURGE_SPEED_MUL : 1);
+    /* coming off the keys pulls harder than getting on them, so letting go
+       stops you instead of skating you across the floor */
+    const rate = Math.hypot(input.mx, input.my) > .05 ? PLAYER_ACCEL : PLAYER_DECEL;
+    p.vx = approach(p.vx, input.mx * sp, rate, dt);
+    p.vy = approach(p.vy, input.my * sp, rate, dt);
   }
+  /* how violently the velocity changed this frame drives the squash */
+  const accel = Math.hypot(p.vx - prevVx, p.vy - prevVy) / Math.max(dt, 1 / 240);
+  const stretchTo = clamp(accel / SQUASH_ACCEL_NORM, 0, SQUASH_MAX_STRETCH);
+  const speedNow = Math.hypot(p.vx, p.vy);
+  if (speedNow > 15) p.stretchAng = Math.atan2(p.vy, p.vx);
+  else if (stretchTo > 0 && (p.vx !== prevVx || p.vy !== prevVy)) p.stretchAng = Math.atan2(p.vy - prevVy, p.vx - prevVx);
+  p.stretch = Math.max(stretchTo, approach(p.stretch || 0, 0, SQUASH_DECAY, dt));
   p.x += p.vx * dt; p.y += p.vy * dt;
+  /* knockback rides on top of movement, and lands before the walls below
+     get their say, so a shove can never push you through one */
+  p.x += p.kb.x * dt; p.y += p.kb.y * dt;
+  p.kb.x *= Math.pow(PLAYER_KB_DECAY, dt); p.kb.y *= Math.pow(PLAYER_KB_DECAY, dt);
   const pad = 20;
-  if (p.x < pad) { p.x = pad; p.vx = Math.abs(p.vx) * .3; }
-  if (p.x > W - pad) { p.x = W - pad; p.vx = -Math.abs(p.vx) * .3; }
-  if (p.y < pad) { p.y = pad; p.vy = Math.abs(p.vy) * .3; }
-  if (p.y > H - pad) { p.y = H - pad; p.vy = -Math.abs(p.vy) * .3; }
-  if (input.fire && p.fireCd <= 0 && p.dashing <= 0) fire();
+  if (p.x < pad) { p.x = pad; p.vx = Math.abs(p.vx) * .3; p.kb.x = Math.abs(p.kb.x) * .3; }
+  if (p.x > W - pad) { p.x = W - pad; p.vx = -Math.abs(p.vx) * .3; p.kb.x = -Math.abs(p.kb.x) * .3; }
+  if (p.y < pad) { p.y = pad; p.vy = Math.abs(p.vy) * .3; p.kb.y = Math.abs(p.kb.y) * .3; }
+  if (p.y > H - pad) { p.y = H - pad; p.vy = -Math.abs(p.vy) * .3; p.kb.y = -Math.abs(p.kb.y) * .3; }
+  /* held or tapped, the press is remembered for a beat: if the cooldown
+     clears inside the window the shot goes out on that frame instead of
+     needing a second press */
+  p.fireBuffer = input.fire ? FIRE_INPUT_BUFFER : Math.max(0, p.fireBuffer - dt);
+  if (p.fireBuffer > 0 && p.fireCd <= 0 && p.dashing <= 0) { fire(); p.fireBuffer = 0; }
   p.fireCd -= dt;
-  if (input.dash) doDash();
+  /* same for dash, which doubles as the swap when a decoy is out. Readiness
+     is checked here rather than inside doDash() so a buffered press doesn't
+     re-trigger its "charging" refusal every frame it waits. */
+  p.dashBuffer = input.dash ? DASH_INPUT_BUFFER : Math.max(0, p.dashBuffer - dt);
+  if (p.dashBuffer > 0 && p.dashing <= 0) {
+    const swapTo = recallTarget();
+    if (swapTo ? recallReady() : p.dash > 0) { doDash(); p.dashBuffer = 0; }
+    else if (input.dash) doDash(); /* the press itself still gets told no; the wait after it is silent */
+  }
   if (input.echo) summonEcho();
   p.hist.push({ x: p.x, y: p.y });
   if (p.hist.length > 150) p.hist.shift();

@@ -1,4 +1,12 @@
 /* Enemy AI update loop, boss behaviour, projectile/pickup updates, and the main world/HUD render pass. */
+/* ---------------- impact tuning ------------------------------------------
+   How fast an enemy sheds a shove (per-second factor, read as Math.pow(x,
+   dt)), and how far the camera moves for a given trauma level. */
+const ENEMY_KB_DECAY = .02;
+const SHAKE_OFFSET = 20;  /* px of camera travel at full trauma */
+const SHAKE_DIR_BIAS = 6; /* px of extra push along a directional hit */
+const SHAKE_TILT = .011;  /* radians of camera roll at full trauma */
+
 /* ---------------- enemies ------------------------------------------------ */
 function targetFor(e) {
   const p = G.player;
@@ -358,7 +366,7 @@ function updateEnemies(dt) {
       e.y += Math.sin(ang + w) * e.sp * dte;
     }
     e.x += e.kb.x * dt; e.y += e.kb.y * dt;
-    e.kb.x *= Math.pow(.02, dt); e.kb.y *= Math.pow(.02, dt);
+    e.kb.x *= Math.pow(ENEMY_KB_DECAY, dt); e.kb.y *= Math.pow(ENEMY_KB_DECAY, dt);
     e.x = clamp(e.x, -60, W + 60); e.y = clamp(e.y, -60, H + 60);
 
     if (e.type !== "bloom") {
@@ -509,6 +517,13 @@ function updateBullets(dt) {
         }
         b.hits.push(e);
         damageEnemy(e, b.dmg, { x: b.x, y: b.y });
+        if (!e.dead) {
+          /* a connecting pulse nudges what it hits and taps the camera. One
+             tap is nearly nothing; a sustained stream is what you feel. */
+          const kbAng = Math.atan2(b.vy, b.vx);
+          e.kb.x += Math.cos(kbAng) * ENEMY_KB_ON_HIT; e.kb.y += Math.sin(kbAng) * ENEMY_KB_ON_HIT;
+          if (!b.echo) shake(TRAUMA_HIT);
+        }
         Audio_.hit();
         if (m.explosive > 0 && !b.echo) explode(b.x, b.y, 80, 0, "255,180,120");
         if (b.pierce > 0) b.pierce--;
@@ -528,7 +543,9 @@ function updateBullets(dt) {
     }
     if (chance(dt * 10)) part(h.x, h.y, { col: h.col, s: 20, life: .3, size: 1.6 });
     const p = G.player;
-    if (segDist(p.x, p.y, hx, hy, h.x, h.y) < h.r + p.r) { hurtPlayer(h.dmg); burst(h.x, h.y, 8, h.col, .8); G.hostiles.splice(i, 1); continue; }
+    /* the shot itself is the source, so the shove and the sparks run along
+       its flight path. It carries no hp, so thorns stays out of this. */
+    if (segDist(p.x, p.y, hx, hy, h.x, h.y) < h.r + p.r) { hurtPlayer(h.dmg, h); burst(h.x, h.y, 8, h.col, .8); G.hostiles.splice(i, 1); continue; }
     for (const c of G.echoes) if (dist(h, c) < h.r + c.r) { c.hp -= h.dmg; c.hit = .12; burst(h.x, h.y, 6, h.col, .7); G.hostiles.splice(i, 1); break; }
   }
 }
@@ -782,9 +799,13 @@ function render() {
   ctx.fillRect(0, 0, W, H);
   ctx.save();
   if (G.trauma > 0) {
-    const t = G.trauma * G.trauma;
-    ctx.translate(rnd(-1, 1) * 20 * t + G.shakeDir.x * t * 6, rnd(-1, 1) * 20 * t + G.shakeDir.y * t * 6);
-    ctx.rotate(rnd(-1, 1) * .011 * t);
+    /* raising trauma to a power is what keeps chip damage from wobbling the
+       room: the offset curves in on the square, the roll on the cube, so it
+       only tilts when something genuinely large has happened */
+    const tp = Math.pow(G.trauma, TRAUMA_POW_POS), tr = Math.pow(G.trauma, TRAUMA_POW_ROT);
+    ctx.translate(rnd(-1, 1) * SHAKE_OFFSET * tp + G.shakeDir.x * tp * SHAKE_DIR_BIAS,
+      rnd(-1, 1) * SHAKE_OFFSET * tp + G.shakeDir.y * tp * SHAKE_DIR_BIAS);
+    ctx.rotate(rnd(-1, 1) * SHAKE_TILT * tr);
   }
   drawWorld();
   ctx.restore();
