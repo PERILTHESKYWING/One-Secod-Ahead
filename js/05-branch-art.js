@@ -7,6 +7,15 @@
    first and detail second.
    ===================================================================== */
 
+/* ---- impact read (shared by every enemy, applied in drawEnemy) ---------
+   Knockback doubles as the squash driver, so these are the only knobs for
+   how hard a shoved enemy deforms. */
+const KB_STRETCH_MIN = 4;     /* kb speed below this doesn't deform anything */
+const KB_STRETCH_NORM = 1100; /* kb speed mapping to a full-scale stretch — one pulse
+                                 lands near .05, a dash or swap wave pins the cap */
+const KB_STRETCH_MAX = .2;    /* stretch ceiling, as a fraction of scale */
+const HIT_POP = .13;          /* extra scale at the peak of a hit flash */
+
 /* shared: a slow specular sweep across a hard surface */
 function sheen(r, phase, col, a) {
   ctx.save();
@@ -1423,13 +1432,21 @@ function drawEnemy(e) {
     softShadow(e.x, e.y, e.r, e.r);
   ctx.save();
   ctx.translate(e.x, e.y);
+  /* whatever is shoving it also stretches it along the shove — the knockback
+     vector decays on its own, so the squash rides out with it */
+  const kbSpd = Math.hypot(e.kb.x, e.kb.y);
+  if (kbSpd > KB_STRETCH_MIN) {
+    const kbAng = Math.atan2(e.kb.y, e.kb.x);
+    const st = clamp(kbSpd / KB_STRETCH_NORM, 0, KB_STRETCH_MAX);
+    ctx.rotate(kbAng); ctx.scale(1 + st, 1 - st * .55); ctx.rotate(-kbAng);
+  }
   const born = e.born < .35 ? .4 + (e.born / .35) * .6 : 1;
-  const sc = born * (1 + (e.pop || 0) * .3 + (e.hit || 0) * 1.1);
+  const sc = born * (1 + (e.pop || 0) * .3 + clamp((e.hit || 0) / HIT_FLASH_ENEMY, 0, 1) * HIT_POP);
   if (sc !== 1) ctx.scale(sc, sc);
   if (e.elite) eliteAura(e, c);
   (ART[e.type] || ART.husk)(e, c);
   if (e.hit > 0) {
-    ctx.globalAlpha = clamp(e.hit * 5, 0, .92);
+    ctx.globalAlpha = clamp(e.hit / HIT_FLASH_ENEMY, 0, 1) * .92;
     ctx.fillStyle = "rgb(" + TH.rim + ")";
     ctx.beginPath(); ctx.arc(0, 0, e.r * 1.06, 0, TAU); ctx.fill();
   }

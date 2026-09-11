@@ -458,7 +458,7 @@ function endRun() {
   shock(p.x, p.y, { r0: 14, r1: 300, life: .5, col: TH.echo, w: 4 });
   text(p.x, p.y - 60, "timeline broken", TH.echo, 26);
   G.slowmo = 1.5; G.chroma = 1; G.deathT = 2.2;
-  flash(.55); shake(1.2); hitStop(.22); Audio_.death();
+  flash(.55); shake(1.2); hitStop(HITSTOP_DEATH); Audio_.death();
   G.mode = "dead";
   Audio_.target = .05;
   if (G.attract) { setTimeout(() => startAttract(), 900); return; }
@@ -693,11 +693,21 @@ function frame(now) {
   if (CINE.active) { cineTick(dt); return; }
   let sdt = dt;
   if (G.slowmo > 0) { G.slowmo -= dt; sdt *= .34; }
-  if (G.freeze > 0) { G.freeze -= dt; sdt = dt * .08; }
+  /* hit-stop: the fight holds still for a couple of frames while the sparks
+     it just threw keep going, which is what sells the weight of the hit */
+  const frozen = G.freeze > 0;
+  if (frozen) G.freeze = Math.max(0, G.freeze - dt);
   const running = G.mode === "play" && !G.paused && !G.drafting;
-  if (running) { sim(sdt); updateFx(sdt); }
-  else if (G.mode === "dead") { G.time += sdt * .4; updateEnemies(sdt * .3); updateBullets(sdt * .3); updateEchoes(sdt * .3); updateTraces(sdt * .3); updateFx(sdt * .7); }
-  G.trauma = Math.max(0, G.trauma - dt * 1.9);
+  if (running) {
+    if (!frozen) sim(sdt);
+    updateFx(frozen ? dt : sdt);
+  } else if (G.mode === "dead") {
+    const ddt = frozen ? 0 : sdt;
+    G.time += ddt * .4; updateEnemies(ddt * .3); updateBullets(ddt * .3); updateEchoes(ddt * .3); updateTraces(ddt * .3);
+    updateFx(frozen ? dt : sdt * .7);
+  }
+  /* exponential bleed-off, snapped to zero so a settled camera is truly still */
+  G.trauma = G.trauma > .002 ? approach(G.trauma, 0, TRAUMA_DECAY, dt) : 0;
   G.flash = Math.max(0, G.flash - dt * 3.4);
   G.chroma = Math.max(0, G.chroma - dt * 1.6);
   G.deathT = Math.max(0, G.deathT - dt);
