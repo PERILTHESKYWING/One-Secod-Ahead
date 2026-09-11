@@ -490,6 +490,7 @@ function chooseCore(i) {
 /* settings */
 const SETTINGS_DEF = [
   { id: "theme", label: "Palette", hint: "Cycles the palettes you own. T does the same thing anywhere.", type: "theme" },
+  { id: "brightness", label: "Brightness", hint: "Overall screen brightness", type: "range" },
   { id: "autofire", label: "Auto-fire", hint: "The pulse cannon runs itself. Leave this on unless you want the trigger back", type: "toggle" },
   { id: "aimassist", label: "Aim assist", hint: "Snaps your aim to whatever you are already pointing near, and locks on entirely on touch", type: "toggle" },
   { id: "boot", label: "Boot sequence", hint: "Play the chamber diagnostic when the game opens", type: "toggle" },
@@ -510,7 +511,7 @@ function renderSettings() {
       row.innerHTML = "<div><b>" + s.label + "</b><small>" + s.hint + "</small></div>" +
         '<input type="range" min="0" max="1" step="0.05" value="' + SAVE.settings[s.id] + '" aria-label="' + s.label + '">';
       const inp = row.querySelector("input");
-      inp.oninput = () => { SAVE.settings[s.id] = parseFloat(inp.value); Audio_.applyVolumes(); persist(); };
+      inp.oninput = () => { SAVE.settings[s.id] = parseFloat(inp.value); applySettings(); persist(); };
       inp.onchange = () => Audio_.ui();
     } else if (s.type === "theme") {
       row.innerHTML = "<div><b>" + s.label + "</b><small>" + s.hint + "</small></div>" +
@@ -528,7 +529,12 @@ function renderSettings() {
     body.appendChild(row);
   }
 }
-function applySettings() { document.body.classList.toggle("no-grain", !SAVE.settings.grain); Audio_.applyVolumes(); }
+function applySettings() {
+  document.body.classList.toggle("no-grain", !SAVE.settings.grain);
+  const b = SAVE.settings.brightness == null ? .5 : SAVE.settings.brightness;
+  $("#app").style.filter = "brightness(" + (0.6 + b * 0.8).toFixed(2) + ")";
+  Audio_.applyVolumes();
+}
 function drawBestiary() {
   const box = $("#bestiary");
   if (!box) return;

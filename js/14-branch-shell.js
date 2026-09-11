@@ -367,11 +367,6 @@ function refreshBranchHome() {
   const n = TIMELINES.filter(tlUnlocked).length;
   const el = $("#menuPlaySub");
   if (el) el.textContent = n > 1 ? n + " branches online" : "Six chambers, one life";
-  const a = $("#menuArcSub");
-  if (a) {
-    const done = LORE.filter(loreUnlocked).length + SECRETS.filter((s) => SAVE.secrets[s.id]).length;
-    a.textContent = done + " of " + (LORE.length + SECRETS.length) + " entries recovered";
-  }
   const ops = $("#opsLink");
   if (ops) ops.classList.toggle("on", !!SAVE.admin);
 }
@@ -544,7 +539,14 @@ function moveMenu(menu, d) { selectMenu(menu, parseInt(menu.dataset.idx || "0", 
 function activeMenu() {
   if (currentScreen === "home") return $("#mainMenu");
   if (currentScreen === "pause") return $("#pauseMenu");
+  if (currentScreen === "submenu") return $("#submenuMenu");
   return null;
+}
+/* where returnTo points, for screens reachable from more than one place */
+function returnToFor() {
+  if (currentScreen === "pause") return "pause";
+  if (currentScreen === "submenu") return "submenu";
+  return "home";
 }
 function route(dest) {
   Audio_.init(); Audio_.resume();
@@ -552,12 +554,11 @@ function route(dest) {
   if (dest === "survival") { setTimeline("ch09"); startPlay("survival"); return; }
   if (dest === "again") { startPlay(lastMode); return; }
   if (dest === "shop") { returnTo = currentScreen === "pause" ? "pause" : "home"; renderShop(); show("shop"); Audio_.confirm(); return; }
-  if (dest === "guide") { returnTo = currentScreen === "pause" ? "pause" : "home"; drawBestiary(); show("guide"); Audio_.ui(); return; }
-  if (dest === "settings") { returnTo = currentScreen === "pause" ? "pause" : "home"; renderSettings(); show("settings"); Audio_.ui(); return; }
+  if (dest === "guide") { returnTo = returnToFor(); drawBestiary(); show("guide"); Audio_.ui(); return; }
+  if (dest === "settings") { returnTo = returnToFor(); renderSettings(); show("settings"); Audio_.ui(); return; }
+  if (dest === "submenu") { show("submenu"); selectMenu($("#submenuMenu"), 0); Audio_.ui(); return; }
   if (dest === "home") { if (G.mode === "play" && !G.attract) { G.paused = false; endRunSilently(); } goHome(); Audio_.ui(false); return; }
-  if (dest === "cine") { runCine(() => goHome()); return; }
   if (dest === "boot") { runCine(() => goHome()); return; }
-  if (dest === "archive") { returnTo = currentScreen === "pause" ? "pause" : "home"; renderArchive(); show("archive"); Audio_.ui(); return; }
   if (dest === "timelines") { renderTimelines(); show("timelines"); Audio_.ui(); return; }
   if (dest === "admin") { openAdmin(); Audio_.ui(); return; }
   if (dest === "resume") { togglePause(false); return; }
@@ -608,9 +609,11 @@ addEventListener("keydown", (e) => {
   }
   if (k === "escape") {
     if (currentScreen === "cine") { skipCine(); return; }
-    if (currentScreen === "timelines" || currentScreen === "archive" || currentScreen === "admin") { goHome(); return; }
+    if (currentScreen === "timelines" || currentScreen === "admin" || currentScreen === "submenu") { goHome(); return; }
     if (currentScreen === "shop" || currentScreen === "guide" || currentScreen === "settings") {
-      if (returnTo === "pause") { show("pause"); selectMenu($("#pauseMenu"), 0); } else goHome();
+      if (returnTo === "pause") { show("pause"); selectMenu($("#pauseMenu"), 0); }
+      else if (returnTo === "submenu") { show("submenu"); selectMenu($("#submenuMenu"), 0); }
+      else goHome();
     } else if (currentScreen === "pause") togglePause(false);
     else if (currentScreen === "results") route("home");
     else if (currentScreen === "none") togglePause(true);
@@ -620,13 +623,10 @@ addEventListener("keydown", (e) => {
     if (k === "enter") return route("play");
     if (k === "v") return route("survival");
     if (k === "l") return route("shop");
-    if (k === "h") return route("guide");
-    if (k === "b") return route("cine");
-    if (k === "a") return route("archive");
+    if (k === "m") return route("submenu");
     if (k === "`" || k === "~") return route("admin");
     codeBuffer = (codeBuffer + k).slice(-8);
     if (codeBuffer.indexOf("1041") >= 0) { codeBuffer = ""; unlockSecret("constant"); document.body.classList.add("showops"); refreshBranchHome(); }
-    if (k === "s") return route("settings");
   }
   if (currentScreen === "results" && (k === "r" || k === "enter")) route("again");
 });
