@@ -412,15 +412,15 @@ const ART = {
     }
   },
 
-  /* ---- BULWARK — a knight behind a tower shield ------------------------- */
+  /* ---- BULWARK — a barrier drone projecting a hard-light riot shield ---- */
   bulwark(e, c) {
     const r = e.r;
     const dark = "rgb(" + shade(c, .34) + ")", mid = "rgb(" + shade(c, .68) + ")";
     const hi = "rgba(" + shade(c, 1.45, .4, [255, 255, 255]) + ",.5)";
     ctx.save(); ctx.rotate(e.ang);
-    /* legs */
+    /* legs — piston struts, not jointed limbs */
     for (const sgn of [-1, 1]) {
-      limb(-r * .3, sgn * r * .42, r * .82, Math.PI * (sgn > 0 ? .6 : 1.4),
+      strut(-r * .3, sgn * r * .42, r * .82, Math.PI * (sgn > 0 ? .6 : 1.4),
         Math.sin(e.wob * 2 + (sgn > 0 ? 0 : Math.PI)) * .3, dark, 4.2);
     }
     /* backpack / brace */
@@ -429,43 +429,44 @@ const ART = {
     ctx.fillStyle = bodyGrad("bulwarkBody", r, "rgb(" + shade(c, 1.2, .28, [255, 255, 255]) + ")", "rgb(" + shade(c, .46) + ")");
     polyPath(r, 7, e.wob * .04); ctx.fill(); outline(r, c);
     plate(-r * .4, -r * .5, r * .82, r * 1.0, r * .24, "rgba(" + shade(c, .6) + ",.92)", hi);
-    /* helm with a slit and a crest */
+    /* turret dome with a visor slit — a squat sensor housing, no helm, no crest */
     ctx.save();
     ctx.translate(r * .42, 0);
     ctx.fillStyle = mid;
-    ctx.beginPath();
-    ctx.moveTo(r * .42, 0);
-    ctx.quadraticCurveTo(r * .3, r * .42, -r * .18, r * .34);
-    ctx.quadraticCurveTo(-r * .34, 0, -r * .18, -r * .34);
-    ctx.quadraticCurveTo(r * .3, -r * .42, r * .42, 0);
-    ctx.closePath(); ctx.fill();
-    visor(r * .16, 0, r * .1, r * .34, "255,110,140", .95, Math.PI / 2);
-    ctx.fillStyle = dark;
-    ctx.beginPath();
-    ctx.moveTo(-r * .05, -r * .34); ctx.lineTo(r * .05, -r * .72); ctx.lineTo(r * .18, -r * .3);
-    ctx.closePath(); ctx.fill();
+    rrect(-r * .3, -r * .38, r * .68, r * .76, r * .16); ctx.fill();
+    visor(r * .18, 0, r * .1, r * .34, "255,110,140", .95, Math.PI / 2);
+    ctx.strokeStyle = "rgba(" + shade(c, 1.3, .3, [255, 255, 255]) + ",.5)"; ctx.lineWidth = 1.1;
+    ctx.beginPath(); ctx.moveTo(-r * .3, -r * .12); ctx.lineTo(r * .38, -r * .12); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(-r * .3, r * .12); ctx.lineTo(r * .38, r * .12); ctx.stroke();
     ctx.restore();
     cracks(r, e.hp / e.maxHp, "rgb(" + shade(c, .26) + ")");
     rimLight(r);
     ctx.restore();
-    /* the shield itself — a slab hung off the facing arm */
+    /* the shield — a projected hard-light barrier panel, not a physical slab */
     ctx.save();
     ctx.rotate(e.face);
     const glow = e.deflect > 0 ? e.deflect * 4 : 0;
     ctx.translate(r + 8, 0);
-    ctx.fillStyle = "rgb(" + shade(c, .5 + glow * .6, .12 + glow * .5, [255, 255, 255]) + ")";
-    ctx.beginPath();
-    ctx.moveTo(r * .3, -r * 1.05);
-    ctx.quadraticCurveTo(r * .62, 0, r * .3, r * 1.05);
-    ctx.lineTo(-r * .22, r * .82);
-    ctx.quadraticCurveTo(-r * .05, 0, -r * .22, -r * .82);
-    ctx.closePath(); ctx.fill();
+    const shieldPath = () => {
+      ctx.beginPath();
+      ctx.moveTo(r * .3, -r * 1.05);
+      ctx.quadraticCurveTo(r * .62, 0, r * .3, r * 1.05);
+      ctx.lineTo(-r * .22, r * .82);
+      ctx.quadraticCurveTo(-r * .05, 0, -r * .22, -r * .82);
+      ctx.closePath();
+    };
+    ctx.fillStyle = "rgba(" + shade(c, .5 + glow * .6, .12 + glow * .5, [255, 255, 255]) + "," + (.38 + glow * .3) + ")";
+    shieldPath(); ctx.fill();
     ctx.strokeStyle = "rgba(" + shade(c, 1.5, .5, [255, 255, 255]) + "," + (.6 + glow) + ")";
     ctx.lineWidth = 2.2; ctx.stroke();
+    /* projector grid — suggests a paneled hard-light field, not solid metal */
+    ctx.strokeStyle = "rgba(" + shade(c, 1.3, .4, [255, 255, 255]) + ",.4)"; ctx.lineWidth = 1;
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath(); ctx.moveTo(r * .2, i * r * .55); ctx.lineTo(-r * .1, i * r * .42); ctx.stroke();
+    }
+    /* emitter spine down the middle */
     ctx.fillStyle = "rgba(" + shade(c, .3) + ",.85)";
-    ctx.beginPath();
-    ctx.moveTo(r * .18, 0); ctx.lineTo(-r * .05, -r * .4); ctx.lineTo(-r * .05, r * .4);
-    ctx.closePath(); ctx.fill();
+    rrect(-r * .07, -r * .4, r * .1, r * .8, r * .04); ctx.fill();
     if (glow > 0) {
       ctx.globalAlpha = clamp(glow, 0, 1) * .55;
       glowPool(r * .2, 0, r * 1.6, shade(c, 1.5, .5, [255, 255, 255]), .8);
@@ -519,7 +520,13 @@ const ART = {
       ctx.lineTo(r * .1 + Math.cos(a) * r * .6, Math.sin(a) * r * .6);
       ctx.stroke();
     }
-    faceEye(r * .14, 0, r * .3, 0, "rgb(" + shade(c, 1.3, .2, [255, 90, 110]) + ")", { slit: 1, blink: 1 });
+    /* iris — a plain mechanical pupil, no lid or lash. brightens as it charges. */
+    ctx.fillStyle = "rgba(" + shade(c, 1.3, .2, [255, 90, 110]) + "," + (.65 + chg * .35) + ")";
+    ctx.beginPath(); ctx.arc(r * .14, 0, r * .16, 0, TAU); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255," + (.4 + chg * .6) + ")";
+    ctx.beginPath(); ctx.arc(r * .14, 0, r * .05, 0, TAU); ctx.fill();
+    /* charge-up readout — a small clock face ticking toward the shot */
+    clockTick(r * .1, 0, r * .58, chg, shade(c, 1.3, .2, [255, 90, 110]), 8);
     ctx.strokeStyle = "rgba(" + TH.rim + ",.35)"; ctx.lineWidth = 1.1;
     ctx.beginPath(); ctx.arc(0, 0, r * .95, -2.3, -.7); ctx.stroke();
   },

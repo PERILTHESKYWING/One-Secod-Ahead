@@ -88,6 +88,22 @@ function limb(hx, hy, len, baseAng, swing, col, w) {
   ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = "round";
   ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
 }
+/* mechanical leg: same hip->knee->foot chain as limb(), but straight segments
+   with a hard joint block and a foot pad instead of rounded organic caps */
+function strut(hx, hy, len, baseAng, swing, col, w) {
+  const kx = hx + Math.cos(baseAng + swing * .5) * len * .55;
+  const ky = hy + Math.sin(baseAng + swing * .5) * len * .55;
+  const fx = kx + Math.cos(baseAng + swing) * len * .6;
+  const fy = ky + Math.sin(baseAng + swing) * len * .6;
+  ctx.strokeStyle = col; ctx.lineWidth = w; ctx.lineCap = "butt"; ctx.lineJoin = "miter";
+  ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(kx, ky); ctx.lineTo(fx, fy); ctx.stroke();
+  ctx.save(); ctx.translate(kx, ky); ctx.rotate(baseAng + swing * .5);
+  ctx.fillStyle = col; rrect(-w * .55, -w * .55, w * 1.1, w * 1.1, w * .2); ctx.fill();
+  ctx.restore();
+  ctx.save(); ctx.translate(fx, fy); ctx.rotate(baseAng + swing);
+  ctx.fillStyle = col; rrect(-w * .7, -w * .35, w, w * .7, w * .18); ctx.fill();
+  ctx.restore();
+}
 function eye(x, y, r, look, colIris, blink) {
   ctx.save();
   ctx.translate(x, y);
@@ -171,6 +187,24 @@ function visor(x, y, w, h, col, a, skew) {
   rrect(-w / 2, -h / 2, w, h, h / 2); ctx.fill();
   ctx.fillStyle = "rgba(255,255,255,.55)";
   rrect(-w / 2 + w * .12, -h * .22, w * .3, h * .24, h * .12); ctx.fill();
+  ctx.restore();
+}
+/* a small clock-face charge readout: tick marks plus a hand sweeping from
+   12 o'clock as progress runs 0..1. col is a raw "r,g,b" string. */
+function clockTick(x, y, r, progress, col, ticks) {
+  ctx.save(); ctx.translate(x, y);
+  ctx.strokeStyle = "rgba(" + col + ",.5)"; ctx.lineWidth = 1;
+  const n = ticks || 8;
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * TAU - Math.PI / 2;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r * .74, Math.sin(a) * r * .74);
+    ctx.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = "rgba(" + col + ",.95)"; ctx.lineWidth = 1.8; ctx.lineCap = "round";
+  const a = clamp(progress, 0, 1) * TAU - Math.PI / 2;
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(Math.cos(a) * r * .82, Math.sin(a) * r * .82); ctx.stroke();
   ctx.restore();
 }
 /* a row of teeth along a horizontal mouth line */
