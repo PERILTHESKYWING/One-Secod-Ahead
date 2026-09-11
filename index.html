@@ -56,10 +56,7 @@
         <button class="menu-item sel" data-go="play"><i class="glyph"></i><span class="label">Branches<small class="sub" id="menuPlaySub">Five timelines, one hull</small></span><span class="k">Enter</span></button>
         <button class="menu-item" data-go="survival"><i class="glyph"></i><span class="label">Survival<small class="sub" id="menuSurvSub">Endless waves, nothing to reach</small></span><span class="k">V</span></button>
         <button class="menu-item" data-go="shop"><i class="glyph"></i><span class="label">Echo Lab<small class="sub" id="menuShards">Permanent upgrades</small></span><span class="k">L</span></button>
-        <button class="menu-item" data-go="guide"><i class="glyph"></i><span class="label">How to play<small class="sub">Two buttons, everything else is timing</small></span><span class="k">H</span></button>
-        <button class="menu-item" data-go="archive"><i class="glyph"></i><span class="label">The Archive<small class="sub" id="menuArcSub">Lore, secrets, bestiary</small></span><span class="k">A</span></button>
-        <button class="menu-item" data-go="cine"><i class="glyph"></i><span class="label">Cold open<small class="sub">Replay the cinematic</small></span><span class="k">B</span></button>
-        <button class="menu-item" data-go="settings"><i class="glyph"></i><span class="label">Settings<small class="sub">Sound, light, effects</small></span><span class="k">S</span></button>
+        <button class="menu-item" data-go="submenu"><i class="glyph"></i><span class="label">Menu<small class="sub">How to play, and the options</small></span><span class="k">M</span></button>
       </nav>
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:16px">
         <button class="themeSwap" id="themeSwap"><i></i><span>Daylight</span></button>
@@ -68,6 +65,21 @@
           <div class="rec"><b id="recWave">—</b><span>best wave</span></div>
           <div class="rec"><b id="recScore">—</b><span>best score</span></div>
         </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="submenu">
+    <div class="scrim"></div>
+    <div class="panel">
+      <div class="panel-head"><div><h2>Menu</h2><p>Controls, the bestiary, and how loud and bright this all gets.</p></div></div>
+      <nav class="menu" id="submenuMenu" style="max-width:420px">
+        <button class="menu-item sel" data-go="guide"><i class="glyph"></i><span class="label">How to play<small class="sub">Controls and enemies</small></span></button>
+        <button class="menu-item" data-go="settings"><i class="glyph"></i><span class="label">Settings<small class="sub">Sound, light, effects</small></span></button>
+      </nav>
+      <div class="panel-foot">
+        <div class="keys"><span><i class="k">Esc</i> back</span></div>
+        <button class="btn" data-go="home">Back to menu</button>
       </div>
     </div>
   </section>

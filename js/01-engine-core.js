@@ -34,7 +34,7 @@ const DEFAULT_SAVE = {
     trail: "trail_std", skin: "skin_std", palette: "pal_dark", boom: "boom_std",
   },
   settings: { master: .8, music: .55, sfx: .9, shake: 1, grain: 1, bloom: 1, boot: 1, theme: "dark",
-    autofire: 1, aimassist: 1 },
+    autofire: 1, aimassist: 1, brightness: .5 },
 };
 let SAVE = JSON.parse(JSON.stringify(DEFAULT_SAVE));
 let storageOK = true;
