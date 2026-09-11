@@ -491,8 +491,8 @@ function chooseCore(i) {
 const SETTINGS_DEF = [
   { id: "theme", label: "Palette", hint: "Cycles the palettes you own. T does the same thing anywhere.", type: "theme" },
   { id: "brightness", label: "Brightness", hint: "Overall screen brightness", type: "range" },
-  { id: "autofire", label: "Auto-fire", hint: "The pulse cannon runs itself. Leave this on unless you want the trigger back", type: "toggle" },
-  { id: "aimassist", label: "Aim assist", hint: "Snaps your aim to whatever you are already pointing near, and locks on entirely on touch", type: "toggle" },
+  { id: "autofire", label: "Auto-fire", hint: "Accessibility assist: the pulse cannon runs itself. Off by default — the trigger is yours unless you turn this on", type: "toggle" },
+  { id: "aimassist", label: "Aim assist", hint: "Accessibility assist: snaps your aim to whatever you are already pointing near, and locks on entirely on touch. Off by default", type: "toggle" },
   { id: "boot", label: "Boot sequence", hint: "Play the chamber diagnostic when the game opens", type: "toggle" },
   { id: "master", label: "Master volume", hint: "Everything you hear", type: "range" },
   { id: "music", label: "Music", hint: "The score writes itself as you play and follows the pressure", type: "range" },
