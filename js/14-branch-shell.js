@@ -89,13 +89,17 @@ function setTimeline(id) {
   LEVELS = TL.levels;
   BRANCHFN.field = BRANCHFN.paint = BRANCHFN.over = null;
   BRANCHFN.slowAt = BRANCHFN.dmgAt = BRANCHFN.onKill = null;
+  BRANCHFN.bounds = BRANCHFN.spawnEdge = null;
   Object.assign(BRANCHFN, BRANCH[id] || {});
   BRANCHFN.id = id;
   if (!SAVE.tl[id].entered) { SAVE.tl[id].entered = 1; persist(); }
 }
 /* the live field hooks, swapped per branch. Anything not defined by the
-   current branch falls back to a no-op so the core loop stays simple. */
-const BRANCHFN = { id: "ch09", field: null, paint: null, over: null, slowAt: null, dmgAt: null, onKill: null };
+   current branch falls back to a no-op so the core loop stays simple.
+   `bounds` and `spawnEdge` let a branch own its own room geometry — where
+   the player is allowed to stand, and where enemies step in from — instead
+   of every branch reusing Chamber 09's flat rectangle. */
+const BRANCHFN = { id: "ch09", field: null, paint: null, over: null, slowAt: null, dmgAt: null, onKill: null, bounds: null, spawnEdge: null };
 
 /* ---------------- timeline select screen -------------------------------- */
 let tlSel = 0;
