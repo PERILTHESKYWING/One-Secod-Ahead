@@ -128,6 +128,70 @@ function startLevel(idx) {
   showLevelCard(L);
 }
 function beginLevelWaves() { clearTimeout(hookTimer); G.cardIn = 0; G.carding = false; $("#levelCard").classList.remove("on"); startWave(1); }
+/* Fills a spawn budget the same way every wave always has: pick a type from
+   the pool, spend its cost, maybe roll it elite, stagger the next one in.
+   Takes an optional starting point (t/spent) so a template can run this
+   more than once — a swarm, then a pause, then a finisher — while the
+   total still lands in the same budget envelope it always did. */
+function fillBudget(types, budget, eliteOdds, tStart, spentStart) {
+  const queue = [];
+  let spent = spentStart || 0, t = tStart || 0;
+  while (spent < budget) {
+    const type = pick(types);
+    const c = EN[type].cost;
+    if (spent + c > budget + 2) break;
+    const el = c >= 2 && chance(eliteOdds);
+    spent += c * (el ? 2 : 1);
+    queue.push({ type, t, elite: el });
+    t += rnd(.14, .55);
+    if (chance(.2)) t += rnd(.4, 1.1);
+  }
+  return queue;
+}
+/* Authored wave shapes. Each one still spends the exact same budget the
+   plain fill would (same cost table, same elite odds) — they only decide
+   which flank things come from and how they're paced against each other,
+   not how strong the wave is. A level opts in with `waveTemplates: [...]`
+   and the level cycles through its list wave by wave. */
+const WAVE_TEMPLATES = {
+  /* both flanks open up at once and squeeze toward the middle */
+  pincer(types, budget, tier, eliteOdds) {
+    const half = budget / 2;
+    const left = fillBudget(types, half, eliteOdds, 0);
+    const right = fillBudget(types, half, eliteOdds, rnd(.3, 0));
+    left.forEach((q) => q.side = "left");
+    right.forEach((q) => q.side = "right");
+    return left.concat(right);
+  },
+  /* a fast rush of chaff, a beat of quiet, then the heaviest thing the
+     level has finishes out the budget */
+  swarmElite(types, budget, tier, eliteOdds) {
+    const cheap = types.filter((t) => EN[t].cost <= 1);
+    const pool = cheap.length ? cheap : types;
+    const heavy = types.slice().sort((a, b) => EN[b].cost - EN[a].cost)[0];
+    const swarm = fillBudget(pool, Math.round(budget * .62), eliteOdds);
+    const spent = swarm.reduce((s, q) => s + EN[q.type].cost * (q.elite ? 2 : 1), 0);
+    const t = (swarm.length ? swarm[swarm.length - 1].t : 0) + rnd(1, 1.5);
+    return swarm.concat(fillBudget([heavy], budget, eliteOdds, t, spent));
+  },
+  /* the budget fills in a slow rotation through all four walls at once,
+     so it reads as being surrounded rather than rushed from one side */
+  surround(types, budget, tier, eliteOdds) {
+    const queue = [], sides = ["top", "right", "bottom", "left"];
+    let spent = 0, t = 0, i = 0;
+    while (spent < budget) {
+      const type = pick(types);
+      const c = EN[type].cost;
+      if (spent + c > budget + 2) break;
+      const el = c >= 2 && chance(eliteOdds);
+      spent += c * (el ? 2 : 1);
+      queue.push({ type, t, elite: el, side: sides[i % 4] });
+      i++;
+      t += (i % 4 === 0) ? rnd(.5, 1.1) : rnd(.02, .08);
+    }
+    return queue;
+  },
+};
 function startWave(n) {
   const L = curLevel();
   G.wave = n; G.waveClearing = false;
@@ -141,19 +205,10 @@ function startWave(n) {
     const add = TL.roster[0];
     for (let i = 0; i < 5; i++) G.queue.push({ type: add, t: 2.4 + i * .6 });
   } else {
-    let spent = 0, t = 0;
-    const types = L.types;
     const eliteOdds = clamp((tier - 1) * .035, 0, .3);
-    while (spent < budget) {
-      const type = pick(types);
-      const c = EN[type].cost;
-      if (spent + c > budget + 2) break;
-      const el = c >= 2 && chance(eliteOdds);
-      spent += c * (el ? 2 : 1);
-      G.queue.push({ type, t, elite: el });
-      t += rnd(.14, .55);
-      if (chance(.2)) t += rnd(.4, 1.1);
-    }
+    const tmplId = L.waveTemplates && L.waveTemplates.length ? L.waveTemplates[(n - 1) % L.waveTemplates.length] : null;
+    const tmpl = tmplId && WAVE_TEMPLATES[tmplId];
+    G.queue = tmpl ? tmpl(L.types, budget, tier, eliteOdds) : fillBudget(L.types, budget, eliteOdds);
   }
   Audio_.waveIn();
   updateWaveDots();
@@ -212,8 +267,14 @@ function startSurvivalWave(n) {
   else if (fresh) banner("Wave " + n, "new arrival: " + fresh.map((x) => EN[x].label.toLowerCase()).join(" and "));
   else banner("Wave " + n, n < 6 ? "hold the chamber" : n < 14 ? "it is getting crowded" : "no more excuses");
 }
-function edgePoint() {
-  const e = rint(0, 3), pad = 52;
+/* `side` ("top"/"right"/"bottom"/"left") lets a wave template choose which
+   flank an enemy steps in from instead of a fully random edge — a branch
+   with its own room shape (see BRANCHFN.spawnEdge) can also redirect this
+   to a point that actually belongs to its floor. */
+function edgePoint(side) {
+  if (BRANCHFN.spawnEdge) return BRANCHFN.spawnEdge(side);
+  const pad = 52;
+  const e = side === "top" ? 0 : side === "right" ? 1 : side === "bottom" ? 2 : side === "left" ? 3 : rint(0, 3);
   if (e === 0) return { x: rnd(W - pad, pad), y: pad };
   if (e === 1) return { x: W - pad, y: rnd(H - pad, pad) };
   if (e === 2) return { x: rnd(W - pad, pad), y: H - pad };
@@ -260,7 +321,7 @@ function tickWaves(dt) {
   for (let i = G.queue.length - 1; i >= 0; i--) {
     G.queue[i].t -= dt;
     if (G.queue[i].t <= 0) {
-      const p = edgePoint();
+      const p = edgePoint(G.queue[i].side);
       G.portals.push({ x: p.x, y: p.y, t: 0, type: G.queue[i].type, elite: G.queue[i].elite });
       G.queue.splice(i, 1);
     }
@@ -676,11 +737,18 @@ function updatePlayer(dt, input) {
      get their say, so a shove can never push you through one */
   p.x += p.kb.x * dt; p.y += p.kb.y * dt;
   p.kb.x *= Math.pow(PLAYER_KB_DECAY, dt); p.kb.y *= Math.pow(PLAYER_KB_DECAY, dt);
+  /* the room's walls: a branch can reshape this floor entirely (see
+     BRANCHFN.bounds in 11-branch-physics.js) — Chamber 09 has none, so it
+     keeps the plain rectangle below */
   const pad = 20;
-  if (p.x < pad) { p.x = pad; p.vx = Math.abs(p.vx) * .3; p.kb.x = Math.abs(p.kb.x) * .3; }
-  if (p.x > W - pad) { p.x = W - pad; p.vx = -Math.abs(p.vx) * .3; p.kb.x = -Math.abs(p.kb.x) * .3; }
-  if (p.y < pad) { p.y = pad; p.vy = Math.abs(p.vy) * .3; p.kb.y = Math.abs(p.kb.y) * .3; }
-  if (p.y > H - pad) { p.y = H - pad; p.vy = -Math.abs(p.vy) * .3; p.kb.y = -Math.abs(p.kb.y) * .3; }
+  if (BRANCHFN.bounds && !G.attract) {
+    BRANCHFN.bounds(p, pad);
+  } else {
+    if (p.x < pad) { p.x = pad; p.vx = Math.abs(p.vx) * .3; p.kb.x = Math.abs(p.kb.x) * .3; }
+    if (p.x > W - pad) { p.x = W - pad; p.vx = -Math.abs(p.vx) * .3; p.kb.x = -Math.abs(p.kb.x) * .3; }
+    if (p.y < pad) { p.y = pad; p.vy = Math.abs(p.vy) * .3; p.kb.y = Math.abs(p.kb.y) * .3; }
+    if (p.y > H - pad) { p.y = H - pad; p.vy = -Math.abs(p.vy) * .3; p.kb.y = -Math.abs(p.kb.y) * .3; }
+  }
   /* held or tapped, the press is remembered for a beat: if the cooldown
      clears inside the window the shot goes out on that frame instead of
      needing a second press */

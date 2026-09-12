@@ -64,6 +64,78 @@ function entropyAdd(n) {
   G.entropy = clamp(G.entropy + n, 0, G.entropyMax);
 }
 
+/* ---- room geometry: a branch can reshape where the player is allowed to
+   stand — walls, a round floor, a zone that breathes or closes in with the
+   branch's own mechanic. Enemies are not constrained by any of this: only
+   your own footing moves, which is what makes the shape something you have
+   to actually play around rather than just look at. Falls back to the
+   plain rectangle (see updatePlayer) when a branch defines none of it. ---- */
+function clampToRect(x, y, r) { return { x: clamp(x, r.x0, r.x1), y: clamp(y, r.y0, r.y1) }; }
+function insideRect(x, y, r) { return x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1; }
+function nearestInRects(x, y, rects) {
+  for (const r of rects) if (insideRect(x, y, r)) return { x, y };
+  let best = null, bd = Infinity;
+  for (const r of rects) {
+    const c = clampToRect(x, y, r);
+    const d = Math.hypot(c.x - x, c.y - y);
+    if (d < bd) { bd = d; best = c; }
+  }
+  return best;
+}
+/* clamps onto the nearest point inside the union of rects, and bounces the
+   player's velocity/knockback off whichever wall it hit — same feel as the
+   flat rectangle clamp it replaces */
+function boundToRects(p, rects) {
+  const res = nearestInRects(p.x, p.y, rects);
+  const dx = res.x - p.x, dy = res.y - p.y;
+  if (dx) { const s = dx > 0 ? 1 : -1; p.vx = s * Math.abs(p.vx) * .3; p.kb.x = s * Math.abs(p.kb.x) * .3; }
+  if (dy) { const s = dy > 0 ? 1 : -1; p.vy = s * Math.abs(p.vy) * .3; p.kb.y = s * Math.abs(p.kb.y) * .3; }
+  p.x = res.x; p.y = res.y;
+}
+function boundToCircle(p, cx, cy, R) {
+  const dx = p.x - cx, dy = p.y - cy, d = Math.hypot(dx, dy);
+  if (d > R && d > 0) {
+    const nx = dx / d, ny = dy / d;
+    p.x = cx + nx * R; p.y = cy + ny * R;
+    const vr = p.vx * nx + p.vy * ny;
+    if (vr > 0) { p.vx -= vr * 1.3 * nx; p.vy -= vr * 1.3 * ny; }
+    const kr = p.kb.x * nx + p.kb.y * ny;
+    if (kr > 0) { p.kb.x -= kr * 1.3 * nx; p.kb.y -= kr * 1.3 * ny; }
+  }
+}
+
+/* Glassfall — the Cut Hall: two rooms and a corridor between them, computed
+   fresh off the current W/H so a resize never leaves you outside it. */
+function glassfallRooms(pad) {
+  const gap = 130, corHalf = Math.min(150, H * .22);
+  const midLo = W / 2 - gap / 2, midHi = W / 2 + gap / 2, cy = H / 2;
+  return {
+    left: { x0: pad, x1: midLo, y0: pad, y1: H - pad },
+    right: { x0: midHi, x1: W - pad, y0: pad, y1: H - pad },
+    corridor: { x0: midLo, x1: midHi, y0: cy - corHalf, y1: cy + corHalf },
+    midLo, midHi, corHalf, cy, pad,
+  };
+}
+/* Emberwake — a round forge floor under the corona sweep. It tightens as
+   your heat climbs, so running hot costs you room as well as ammo. */
+function emberwakeFloor(pad) {
+  return { cx: W / 2, cy: H / 2, R: Math.max(120, Math.min(W, H) / 2 - pad - (G.heat || 0) * 40) };
+}
+/* Nulltide — the floor breathes with the tide: it closes in as the
+   rewind approaches and opens back up the instant it turns. */
+function nulltideFloor(pad) {
+  const tideT = G.tideT > 0 ? G.tideT : 15;
+  const f = clamp(1 - tideT / 15, 0, 1);
+  const inset = pad + f * f * 130;
+  return { x0: inset, x1: W - inset, y0: inset, y1: H - inset, f };
+}
+/* Terminus — the entropy horizon is no longer just a line: it is the wall. */
+function terminusFloor(pad) {
+  const f = 1 - clamp(G.entropy / G.entropyMax, 0, 1);
+  const inset = f > .25 ? (f - .25) * 90 : pad;
+  return { x0: inset, x1: W - inset, y0: inset, y1: H - inset, f };
+}
+
 /* ---- the branch field table ---- */
 const BRANCH = {
   glassfall: {
@@ -107,6 +179,18 @@ const BRANCH = {
     },
     slowAt(x, y) { return stasisAt(x, y) ? .34 : chillAt(x, y) ? .62 : 1; },
     dmgAt(x, y) { return stasisAt(x, y) ? 2 : 1; },
+    bounds(p, pad) { const g = glassfallRooms(pad); boundToRects(p, [g.left, g.right, g.corridor]); },
+    spawnEdge(side) {
+      const g = glassfallRooms(52);
+      const room = pick([g.left, g.right]);
+      const opts = {
+        left: { x: g.left.x0, y: rnd(g.left.y1, g.left.y0) },
+        right: { x: g.right.x1, y: rnd(g.right.y1, g.right.y0) },
+        top: { x: rnd(room.x1, room.x0), y: room.y0 },
+        bottom: { x: rnd(room.x1, room.x0), y: room.y1 },
+      };
+      return opts[side] || pick(Object.values(opts));
+    },
     onKill(e) {
       if (!stasisAt(e.x, e.y)) return;
       /* things that die inside a disc shatter into their neighbours */
@@ -120,6 +204,33 @@ const BRANCH = {
       Audio_.shatter();
     },
     paint() {
+      /* the frozen walls that split the hall into two rooms and a corridor */
+      const g = glassfallRooms(26), fc = ecol(EN.facet.col);
+      const bands = [
+        { x0: g.midLo, x1: g.midHi, y0: 26, y1: g.corridor.y0 },
+        { x0: g.midLo, x1: g.midHi, y0: g.corridor.y1, y1: H - 26 },
+      ];
+      for (const b of bands) {
+        const w = b.x1 - b.x0, h = b.y1 - b.y0;
+        if (h <= 0) continue;
+        const grad = ctx.createLinearGradient(b.x0, 0, b.x1, 0);
+        grad.addColorStop(0, "rgba(" + fc + ",.02)");
+        grad.addColorStop(.5, "rgba(" + fc + ",.16)");
+        grad.addColorStop(1, "rgba(" + fc + ",.02)");
+        ctx.fillStyle = grad;
+        ctx.fillRect(b.x0, b.y0, w, h);
+        ctx.strokeStyle = "rgba(" + fc + ",.4)"; ctx.lineWidth = 1.4;
+        ctx.strokeRect(b.x0, b.y0, w, h);
+        ctx.strokeStyle = "rgba(255,255,255,.1)"; ctx.lineWidth = 1;
+        for (let i = 0; i < 5; i++) {
+          const lx = b.x0 + (i + .5) * (w / 5);
+          ctx.beginPath(); ctx.moveTo(lx, b.y0); ctx.lineTo(lx + 10, b.y1); ctx.stroke();
+        }
+      }
+      /* the corridor mouth itself, so the opening reads clearly */
+      ctx.strokeStyle = "rgba(" + fc + ",.55)"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(g.midLo, g.corridor.y0); ctx.lineTo(g.midLo, g.corridor.y1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(g.midHi, g.corridor.y0); ctx.lineTo(g.midHi, g.corridor.y1); ctx.stroke();
       for (const c of G.chill) {
         const a = clamp(c.life / c.max, 0, 1);
         ctx.globalAlpha = a * .16;
@@ -193,7 +304,21 @@ const BRANCH = {
         if (G.safeWedge.life <= 0) G.safeWedge = null;
       }
     },
+    bounds(p, pad) { const f = emberwakeFloor(pad); boundToCircle(p, f.cx, f.cy, f.R); },
     paint() {
+      /* the forge floor: a round arena under the corona, tighter the hotter you run.
+         Everything past the ring is dead space — tinted dark rather than clipped,
+         since enemies still cross it freely on their way in. */
+      const fl = emberwakeFloor(26);
+      const dark = ctx.createRadialGradient(fl.cx, fl.cy, fl.R * .85, fl.cx, fl.cy, Math.max(W, H) * .75);
+      dark.addColorStop(0, "rgba(20,8,4,0)");
+      dark.addColorStop(1, "rgba(20,8,4,.55)");
+      ctx.fillStyle = dark;
+      ctx.fillRect(0, 0, W, H);
+      ctx.strokeStyle = "rgba(255,200,130,.35)"; ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.arc(fl.cx, fl.cy, fl.R, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = "rgba(255,150,70,.15)"; ctx.lineWidth = 14;
+      ctx.beginPath(); ctx.arc(fl.cx, fl.cy, fl.R + 7, 0, TAU); ctx.stroke();
       /* corona sweep wedge */
       const cx = W / 2, cy = H / 2, R = Math.max(W, H) * 1.2;
       const g = ctx.createRadialGradient(cx, cy, 20, cx, cy, R);
@@ -290,7 +415,32 @@ const BRANCH = {
         }
       }
     },
+    bounds(p, pad) { const r = nulltideFloor(pad); boundToRects(p, [r]); },
     paint() {
+      /* the shoreline: the floor breathes with the tide, and the water
+         line that's actually load-bearing is drawn here, waves and all */
+      const fl = nulltideFloor(26), fc = ecol(EN.fathom.col);
+      if (fl.f > .02) {
+        ctx.save();
+        ctx.strokeStyle = "rgba(" + fc + "," + (.2 + fl.f * .4) + ")";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        for (let x = fl.x0; x <= fl.x1; x += 24) {
+          const yy = fl.y0 + Math.sin(x * .04 + G.time * 2.2) * (3 + fl.f * 5);
+          x === fl.x0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+        }
+        ctx.stroke();
+        ctx.beginPath();
+        for (let x = fl.x0; x <= fl.x1; x += 24) {
+          const yy = fl.y1 + Math.sin(x * .04 - G.time * 2.2 + 2) * (3 + fl.f * 5);
+          x === fl.x0 ? ctx.moveTo(x, yy) : ctx.lineTo(x, yy);
+        }
+        ctx.stroke();
+        ctx.fillStyle = "rgba(" + fc + "," + (.03 + fl.f * .05) + ")";
+        ctx.fillRect(0, 0, W, fl.y0); ctx.fillRect(0, fl.y1, W, H - fl.y1);
+        ctx.fillRect(0, 0, fl.x0, H); ctx.fillRect(fl.x1, 0, W - fl.x1, H);
+        ctx.restore();
+      }
       /* caustics on the floor */
       ctx.save();
       ctx.globalAlpha = .06;
@@ -391,6 +541,7 @@ const BRANCH = {
         if (c.life <= 0) { burst(c.x, c.y, 14, ecol(EN.omega.col), 1); G.omegaEchoes.splice(i, 1); }
       }
     },
+    bounds(p, pad) { const r = terminusFloor(pad); boundToRects(p, [r]); },
     paint() {
       /* long shadows: everything in Terminus casts one, toward the last light */
       const la = Math.PI * .75;
@@ -404,10 +555,15 @@ const BRANCH = {
         ctx.restore();
       }
       ctx.restore();
-      /* the entropy horizon: a slowly closing frame of dead space */
+      /* the entropy horizon: a slowly closing frame of dead space. This is
+         the wall from bounds() above, drawn with the exact same inset so
+         the line you see is the line that actually stops you. */
       const f = 1 - clamp(G.entropy / G.entropyMax, 0, 1);
       if (f > .25) {
         const inset = (f - .25) * 90;
+        ctx.fillStyle = "rgba(" + ecol(EN.coda.col) + "," + ((f - .25) * .1) + ")";
+        ctx.fillRect(0, 0, W, inset); ctx.fillRect(0, H - inset, W, inset);
+        ctx.fillRect(0, inset, inset, H - inset * 2); ctx.fillRect(W - inset, inset, inset, H - inset * 2);
         ctx.strokeStyle = "rgba(" + ecol(EN.coda.col) + "," + ((f - .25) * .5) + ")";
         ctx.lineWidth = 2;
         ctx.strokeRect(inset, inset, W - inset * 2, H - inset * 2);
