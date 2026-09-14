@@ -1,11 +1,116 @@
 /* Enemy AI update loop, boss behaviour, projectile/pickup updates, and the main world/HUD render pass. */
 /* ---------------- impact tuning ------------------------------------------
-   How fast an enemy sheds a shove (per-second factor, read as Math.pow(x,
-   dt)), and how far the camera moves for a given trauma level. */
-const ENEMY_KB_DECAY = .02;
+   An enemy shove is a displacement tween, not a velocity. The old version
+   was a velocity with exponential decay, which integrates to a long smooth
+   glide — a body hit by a pulse *slid*, and a slide reads as ice, not as
+   impact. This plays the whole shove as one authored move instead:
+
+     0 ──────► SHOVE_PUNCH ──────────────► 1      (u = t / SHOVE_DUR)
+     |  quartic ease-out, overshoots   |  cosine ease back to rest
+     |  past the resting distance      |
+     └── the hit ──────────────────────┴── the recovery ──────────────
+
+   The first third of the window covers most of the ground on a sharp
+   ease-out (fast, then decelerating hard), carries slightly past where
+   the body ends up, and the rest of the window eases back onto the
+   resting offset. Net travel is exactly SHOVE distance; the shape of
+   getting there is what makes it read as a shove rather than a slide.
+
+   Everything is expressed in PIXELS OF TRAVEL, divided by the body's
+   weight (EN[].wt). A Mote goes nearly three times as far as a Weaver on
+   the same pulse; a Trench hardly moves. */
+const SHOVE_DUR = .19;          /* seconds one shove takes to play out */
+const SHOVE_PUNCH = .34;        /* fraction of the window spent going out */
+const SHOVE_OVERSHOOT = 1.14;   /* peak travel, as a multiple of the resting distance */
+const SHOVE_MIN_DIST = 1.4;     /* below this the shove is dropped rather than played */
+const SHOVE_MAX_DIST = 220;     /* ceiling on one shove, px */
+const SHOVE_STRETCH_NORM = 90;  /* travel distance that deforms the body to the full limit */
+/* bodies pushing each other apart is collision, not knockback: one flat
+   figure for every enemy, applied to velocity so it dies the instant you
+   step away, and never to p.kb */
+const CONTACT_SEPARATION = 150;
 const SHAKE_OFFSET = 20;  /* px of camera travel at full trauma */
 const SHAKE_DIR_BIAS = 6; /* px of extra push along a directional hit */
 const SHAKE_TILT = .011;  /* radians of camera roll at full trauma */
+
+/* a projectile stopping on a wall. Cheap, and it reads: the shot dies where
+   the wall is, not somewhere past it. */
+function wallSpark(x, y, col) {
+  burst(x, y, 4, col, .6, { life: .2, size: rnd(1, 2.2) });
+}
+/* the two-argument form used by the projectile passes: has this flight
+   segment crossed anything that blocks sight? */
+function arenaHitSeg(x0, y0, x1, y1) {
+  return !G.attract && arenaBoxes().length > 0 && arenaBlocked(x0, y0, x1, y1);
+}
+
+/* ---------------- the shove ----------------------------------------------
+   See the tuning notes above for the shape. u is normalised time through
+   the window; the return is normalised travel, and it goes past 1 before
+   settling back onto it. */
+function shoveCurve(u) {
+  if (u >= 1) return 1;
+  if (u <= 0) return 0;
+  if (u < SHOVE_PUNCH) {
+    const k = u / SHOVE_PUNCH;
+    return SHOVE_OVERSHOOT * (1 - Math.pow(1 - k, 4));
+  }
+  const k = (u - SHOVE_PUNCH) / (1 - SHOVE_PUNCH);
+  return SHOVE_OVERSHOOT + (1 - SHOVE_OVERSHOOT) * (.5 - Math.cos(Math.PI * k) * .5);
+}
+/* how deformed the body is right now: full through the punch, gone by the
+   time it has settled, scaled by how far it is being thrown */
+function shoveStretch(s) {
+  if (!s) return 0;
+  const u = clamp(s.t / s.dur, 0, 1);
+  const env = u < SHOVE_PUNCH ? 1 : 1 - (u - SHOVE_PUNCH) / (1 - SHOVE_PUNCH);
+  return clamp(s.dist / SHOVE_STRETCH_NORM, 0, 1) * env;
+}
+function enWeight(e) {
+  const d = EN[e.type];
+  /* an armoured elite plants itself harder than the stock body does */
+  return Math.max(.2, (d && d.wt ? d.wt : 1) * (e.mod === "armoured" ? 1.5 : 1));
+}
+/* `dist` is px of travel for a weight-1.0 body. A shove landing on top of
+   one already in flight doesn't queue behind it or stomp it: whatever
+   travel the live shove has left is folded into the new one as a vector, so
+   a stream of pulses reads as one continuous push with a pulse-rate jitter
+   rather than a stack of restarts. */
+function shoveEnemy(e, ang, dist) {
+  if (!e || e.dead) return;
+  if (BOSSES[e.type] && e.type !== "omega") return; /* the room-sized ones do not move */
+  let vx = Math.cos(ang) * (dist / enWeight(e)), vy = Math.sin(ang) * (dist / enWeight(e));
+  const s = e.sh;
+  if (s && s.t < s.dur) {
+    const rem = 1 - shoveCurve(s.t / s.dur);
+    vx += Math.cos(s.ang) * s.dist * rem;
+    vy += Math.sin(s.ang) * s.dist * rem;
+  }
+  let d = Math.hypot(vx, vy);
+  if (d < SHOVE_MIN_DIST) { e.sh = null; return; }
+  d = Math.min(d, SHOVE_MAX_DIST);
+  e.sh = { ang: Math.atan2(vy, vx), dist: d, t: 0, dur: SHOVE_DUR, f: 0 };
+}
+/* walks the tween forward and moves the body by the delta it asks for.
+   Substepped against the arena the same way the player is, so a heavy
+   shove can't post a body through a wall between frames. */
+function tickShove(e, dt) {
+  const s = e.sh;
+  if (!s) return;
+  s.t += dt;
+  const f = shoveCurve(s.t / s.dur);
+  const step = (f - s.f) * s.dist;
+  s.f = f;
+  if (step) {
+    const n = Math.min(6, Math.max(1, Math.ceil(Math.abs(step) / 9)));
+    const cx = Math.cos(s.ang) * (step / n), cy = Math.sin(s.ang) * (step / n);
+    for (let i = 0; i < n; i++) {
+      e.x += cx; e.y += cy;
+      if (!BOSSES[e.type]) arenaPush(e);
+    }
+  }
+  if (s.t >= s.dur) e.sh = null;
+}
 
 /* ---------------- enemies ------------------------------------------------ */
 function targetFor(e) {
@@ -68,6 +173,9 @@ function updateEnemies(dt) {
     const dtr = dte * (e.rateMul || 1);
     const t = targetFor(e);
     const ang = Math.atan2(t.y - e.y, t.x - e.x);
+    /* one line-of-sight test per body per frame, shared by everything that
+       wants to know whether it can actually see what it is aiming at */
+    e.los = !arenaBlocked(e.x, e.y, t.x, t.y);
     if (e.type !== "mimic" && e.type !== "mirror") e.ang = lerp(e.ang, ang, 1 - Math.exp(-6 * dte));
 
     if (TLAI[e.type]) {
@@ -365,8 +473,16 @@ function updateEnemies(dt) {
       e.x += Math.cos(ang + w) * e.sp * dte;
       e.y += Math.sin(ang + w) * e.sp * dte;
     }
-    e.x += e.kb.x * dt; e.y += e.kb.y * dt;
-    e.kb.x *= Math.pow(ENEMY_KB_DECAY, dt); e.kb.y *= Math.pow(ENEMY_KB_DECAY, dt);
+    /* the arena gets its say before the shove does, so a body that walked
+       into a wall on its own is already out of it when the shove lands */
+    if (!BOSSES[e.type]) {
+      arenaPush(e);
+      /* if cover has broken its line on you it comes around the wall rather
+         than standing there shooting the wall — cover buys you position and
+         a couple of seconds, not permanent safety */
+      if (e.wallN || !e.los) slideAlongWall(e, dte, t);
+    }
+    tickShove(e, dt);
     e.x = clamp(e.x, -60, W + 60); e.y = clamp(e.y, -60, H + 60);
 
     if (e.type !== "bloom") {
@@ -377,7 +493,10 @@ function updateEnemies(dt) {
         if (t === p) hurtPlayer(dmgAmt * dt * (heavy ? 1.6 : 1), e);
         else { t.hp -= dmgAmt * dt * 1.4; t.hit = .1; }
         const a2 = Math.atan2(t.y - e.y, t.x - e.x);
-        if (t === p) { p.vx += Math.cos(a2) * (e.type === "colossus" ? 520 : 130) * dt; p.vy += Math.sin(a2) * (e.type === "colossus" ? 520 : 130) * dt; }
+        /* bodies separate rather than shove: this is only enough push to
+           stop you and it occupying the same pixel, and it deliberately
+           does not go through p.kb — contact never relocates you. */
+        if (t === p) { p.vx += Math.cos(a2) * CONTACT_SEPARATION * dt; p.vy += Math.sin(a2) * CONTACT_SEPARATION * dt; }
       }
     }
   }
@@ -415,7 +534,7 @@ function updateBoss(e, dt, t, ang) {
       const a0 = Math.atan2(t.y - e.y, t.x - e.x);
       const spin = chance(.5) ? 1.05 : -1.05;
       for (let k = 0; k < 2; k++) {
-        trace({ x: e.x, y: e.y, ang: a0 + k * Math.PI, len: Math.max(W, H) * 1.25, wide: 28,
+        trace({ thru: 1, x: e.x, y: e.y, ang: a0 + k * Math.PI, len: Math.max(W, H) * 1.25, wide: 28,
           warn: .95, live: .3, fade: 1.5, dmg: 26, dot: 12, spin, owner: "paradox",
           col: ecol(EN.paradox.col), follow: e });
       }
@@ -476,6 +595,9 @@ function updateBullets(dt) {
       if (struck) { G.bullets.splice(i, 1); continue; }
     }
     if (b.life <= 0 || b.x < -40 || b.x > W + 40 || b.y < -40 || b.y > H + 40) { G.bullets.splice(i, 1); continue; }
+    /* cover cuts both ways: your pulses stop on a wall too, so leaning out
+       of cover to shoot is a real cost rather than a formality */
+    if (arenaHitSeg(px, py, b.x, b.y)) { wallSpark(b.x, b.y, TH.core); G.bullets.splice(i, 1); continue; }
     for (const e of G.enemies.slice()) {
       if (e.dead || b.hits.indexOf(e) >= 0) continue;
       if (segDist(e.x, e.y, px, py, b.x, b.y) < e.r + b.r) {
@@ -519,9 +641,11 @@ function updateBullets(dt) {
         damageEnemy(e, b.dmg, { x: b.x, y: b.y });
         if (!e.dead) {
           /* a connecting pulse nudges what it hits and taps the camera. One
-             tap is nearly nothing; a sustained stream is what you feel. */
-          const kbAng = Math.atan2(b.vy, b.vx);
-          e.kb.x += Math.cos(kbAng) * ENEMY_KB_ON_HIT; e.kb.y += Math.sin(kbAng) * ENEMY_KB_ON_HIT;
+             tap is nearly nothing; a sustained stream is what you feel. A
+             heavier pulse pushes proportionally harder, so a Hardpoint
+             build visibly walks bodies backwards. */
+          shoveEnemy(e, Math.atan2(b.vy, b.vx),
+            SHOVE_PULSE * clamp(b.dmg / SHOVE_PULSE_DMG_REF, .5, 2.2));
           if (!b.echo) shake(TRAUMA_HIT);
         }
         Audio_.hit();
@@ -541,11 +665,14 @@ function updateBullets(dt) {
       if (h.split > 0 && h.life <= 0) splitOrb(h);
       G.hostiles.splice(i, 1); continue;
     }
+    if (arenaHitSeg(hx, hy, h.x, h.y)) { wallSpark(h.x, h.y, h.col); G.hostiles.splice(i, 1); continue; }
     if (chance(dt * 10)) part(h.x, h.y, { col: h.col, s: 20, life: .3, size: 1.6 });
     const p = G.player;
     /* the shot itself is the source, so the shove and the sparks run along
-       its flight path. It carries no hp, so thorns stays out of this. */
-    if (segDist(p.x, p.y, hx, hy, h.x, h.y) < h.r + p.r) { hurtPlayer(h.dmg, h); burst(h.x, h.y, 8, h.col, .8); G.hostiles.splice(i, 1); continue; }
+       its flight path. This is the ONE call site that passes the projectile
+       flag: a hostile is a thing in flight, and nothing else in the game is.
+       It carries no hp, so thorns stays out of this. */
+    if (segDist(p.x, p.y, hx, hy, h.x, h.y) < h.r + p.r) { hurtPlayer(h.dmg, h, 1); burst(h.x, h.y, 8, h.col, .8); G.hostiles.splice(i, 1); continue; }
     for (const c of G.echoes) if (dist(h, c) < h.r + c.r) { c.hp -= h.dmg; c.hit = .12; burst(h.x, h.y, 6, h.col, .7); G.hostiles.splice(i, 1); break; }
   }
 }
@@ -672,6 +799,11 @@ function drawWorld() {
   drawCorpses();
   for (const c of G.echoes) drawEcho(c);
   for (const e of G.enemies) drawEnemy(e);
+  /* the walls go down here, between the enemies and the player: a body
+     standing behind cover is hidden by it, which is what makes a player
+     read the wall as cover instead of as a pattern on the floor. The
+     player stays on top so you never lose yourself behind one. */
+  if (BRANCHFN.walls && !G.attract) { ctx.save(); try { BRANCHFN.walls(); } catch (err) {} ctx.restore(); }
   for (const b of G.bullets) {
     const g = ctx.createLinearGradient(b.x, b.y, b.x - b.vx * .02, b.y - b.vy * .02);
     const c = b.echo ? TH.echo : TH.core;

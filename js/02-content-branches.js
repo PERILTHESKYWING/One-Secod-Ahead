@@ -16,7 +16,7 @@ const TIMELINES = [
   {
     id: "glassfall", name: "Glassfall", code: "BRANCH 02 · δ", unlockedBy: "ch09",
     blurb: "A branch that was interrupted mid-second and never got the rest of it. Everything in here is still falling.",
-    mech: { name: "Stasis bloom", desc: "Cold discs open across the floor. Inside one, the whole world runs at a third speed — you included — but your pulses hit twice as hard and anything that dies in there shatters into its neighbours." },
+    mech: { name: "Falling floor", desc: "The floor never landed either. Panes crack and drop through the whole level, so the room you finish in is half the room you started in. Cold discs still open across whatever is left: inside one the world runs at a third speed — you included — but your pulses hit twice as hard and anything that dies in there shatters into its neighbours." },
     accent: "168,232,255",
     roster: ["facet", "prism", "rime", "silica", "kelvin"],
     boss: "stillhour",
@@ -38,7 +38,7 @@ const TIMELINES = [
   {
     id: "emberwake", name: "Emberwake", code: "BRANCH 05 · ρ", unlockedBy: "glassfall",
     blurb: "A branch that ran itself forward too fast and burned everything downstream to do it. The noon here has lasted four hundred years.",
-    mech: { name: "Heat", desc: "Your gun runs a heat gauge. Hold the trigger and it climbs; jam it and you're empty for a beat. Dashing vents it instantly. A corona sweep crosses the room on a slow rotation and lights whatever it touches." },
+    mech: { name: "Heat", desc: "Your gun runs a heat gauge. Hold the trigger and it climbs; jam it and you're empty for a beat. Dashing vents it instantly. A corona sweep crosses the room on a slow rotation, the floor spits flame at anything that stands still, and every so often the whole room breathes — out hard toward the rim, then back in toward the sweep." },
     accent: "255,182,96",
     roster: ["filament", "corona", "cinder", "helion", "ignis"],
     boss: "perihelion",
@@ -81,8 +81,12 @@ const TIMELINES = [
   },
   {
     id: "terminus", name: "Terminus", code: "BRANCH ∞ · Ω", unlockedBy: "nulltide",
+    /* the end of every branch, and the hardest of them on purpose: every
+       body in here carries this much extra health, and a third of it as
+       extra speed (see spawnEnemy) */
+    diff: 1.28,
     blurb: "Not a branch. The end of all of them, kept on a loop one second long so the Concordance always has somewhere to put you.",
-    mech: { name: "Entropy clock", desc: "A clock runs down for the whole chamber. Kills put seconds back on it. At zero the room starts taking integrity out of you directly, and it never stops taking it. Colour drains as it runs low." },
+    mech: { name: "The clock", desc: "The floor is a dial and the hand on it is real — stay out of the sweep. Every time it passes twelve the room tolls and gets permanently worse: faster, then a second hand, then a third. Underneath it the entropy clock still runs down, kills still put seconds back, and at zero the room takes integrity straight out of you. And it keeps a copy of you one second back, walking your route and firing your shots. Dash through it to stall it." },
     accent: "232,206,150",
     roster: ["vestige", "coda", "nullc", "epilogue", "zenith"],
     boss: "omega",

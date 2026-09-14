@@ -11,16 +11,76 @@ const PLAYER_DECEL = 30;           /* approach() rate back to a stop — higher 
 const SURGE_SPEED_MUL = 1.22;      /* move speed multiplier while surge is up */
 const DASH_INPUT_BUFFER = .12;     /* 120ms of grace on a dash/swap press */
 const FIRE_INPUT_BUFFER = .12;     /* 120ms of grace on the trigger */
+const MOVE_SUBSTEP = 9;            /* px per collision substep (see stepPlayer) */
 
-/* Knockback is a second velocity that decays on its own and is applied
-   before the room's walls are enforced, so nothing can be shoved through
-   one. Decay values are per-second factors, read as Math.pow(x, dt). */
+/* ---------------- the dash ----------------------------------------------
+   The dash used to fire along the aim, which made it an approach tool: aim
+   and fire are automatic, so the aim points at whatever is nearest, which
+   is exactly the thing you are usually dashing away from. It now fires
+   along the MOVEMENT INPUT instead — the stick/keys decide where you go,
+   the gun keeps pointing wherever it was pointing — so you can dash out of
+   a squeeze while still shooting into it.
+
+   Standing still there is no movement heading, so the dash falls back to
+   the last one you had if it is fresh (DASH_DIR_MEMORY), and to the aim
+   only if you have genuinely been stationary. That keeps the old
+   dash-through-a-body play available on a deliberate standing dash while
+   never hijacking an escape.
+
+   What makes it an escape rather than a fast walk is the window on the far
+   side of it: the i-frames outlast the dash itself, and a speed burst
+   carries you clear afterwards. At base speed you cannot outrun a 340px/s
+   projectile; inside this window you can. */
+const DASH_SPEED = 1180;           /* px/s during the launch */
+const DASH_TIME = .17;             /* how long the launch lasts */
+const DASH_EXIT_IFRAME = .16;      /* extra invulnerable grace after it ends */
+const DASH_DIR_MEMORY = .35;       /* how stale a movement heading may be and still steer a dash */
+const DASH_SURGE_TIME = .42;       /* speed-burst window opened by a dash */
+const DASH_SURGE_MUL = 1.5;        /* move-speed multiplier inside that window */
+const DASH_EXIT_SPEED = 1.18;      /* speed the dash hands off at, as a multiple of the burst speed */
+
+/* ---------------- knockback ---------------------------------------------
+   Player knockback is a second velocity that decays on its own and is
+   integrated inside the substepped move below, so the room's walls get
+   their say after every substep and nothing can be shoved through one.
+   Decay is a per-second factor, read as Math.pow(x, dt).
+
+   Two rules govern when you get shoved at all:
+
+   1. ONLY PROJECTILES SHOVE YOU. A shot, a shell, a thrown orb, a
+      deflected pulse — those carry momentum, so they move you. Walking
+      into a body, standing in fire, a Warden's leash tearing at you, a
+      hazard line, the room's own heat: all of those hurt and none of them
+      move you. Before this, a crowd could pinball you around the room
+      with contact damage alone, which is unreadable and unfair; now the
+      only thing that relocates you is something you could have dodged.
+   2. IT SCALES WITH THE HIT. The multiplier is a power curve on damage,
+      so a 6-damage graze barely registers and a 42-damage shell throws
+      you most of a body length. */
 const PLAYER_KB_DECAY = .03;       /* how fast the player shrugs off a shove */
-const KNOCKBACK_PLAYER_HURT = 210; /* shove from a full-weight hit */
-const KNOCKBACK_HURT_REF = 25;     /* damage that counts as full weight; less scales down */
+const KB_PLAYER_REF = 26;          /* damage that maps to the reference shove */
+const KB_PLAYER_BASE = 260;        /* px/s of shove at the reference hit */
+const KB_PLAYER_EXP = 1.35;        /* how sharply the shove grows with damage */
+const KB_PLAYER_MIN = .16;         /* floor on the multiplier — a graze still ticks you */
+const KB_PLAYER_MAX = 2.1;         /* ceiling, so nothing one-shots you across the floor */
 const KNOCKBACK_PLAYER_BLOCK = 90; /* shove from a hit the shield eats */
-const ENEMY_KB_ON_HIT = 55;        /* flinch an enemy takes from one pulse */
+const KB_DASH_KEEP = .12;          /* how much of a live shove survives a dash or swap */
 const HITSTOP_HURT_MIN_DMG = 12;   /* damage a hit needs before it stops the frame */
+/* px of shove handed to an enemy, before its weight divides it. These are
+   distances now, not velocities (see shoveEnemy) — what a weight-1.0 body
+   actually travels. */
+const SHOVE_PULSE = 15;            /* one connecting pulse */
+const SHOVE_PULSE_DMG_REF = 11;    /* pulse damage the figure above is quoted at */
+const SHOVE_DASH_THROUGH = 74;     /* dashing through a body */
+const SHOVE_DASH_SHOCK = 96;       /* the Shockdash core's ring */
+const SHOVE_SWAP_WAVE = 88;        /* the Displacement wave module, both ends */
+const SHOVE_SPORE_SCATTER = 58;    /* motes thrown clear of the spore that made them */
+/* how hard a projectile shove is, as a multiple of the player figure: the
+   same curve drives both, so a Revenant's cleave reads heavy on either
+   side of the fight */
+function playerKbMag(n) {
+  return KB_PLAYER_BASE * clamp(Math.pow(n / KB_PLAYER_REF, KB_PLAYER_EXP), KB_PLAYER_MIN, KB_PLAYER_MAX);
+}
 
 /* Squash and stretch, driven by how hard the velocity changed this frame.
    Measured against the real manoeuvres, the normaliser below lands roughly:
@@ -64,12 +124,19 @@ function baseMods() {
 }
 function makePlayer() {
   const maxHp = Math.round((100 + lvlOf("hp") * 15) * G.mods.hpMul);
+  /* never put the hull down inside the room's geometry: some layouts have a
+     wall where the old fixed spawn point was (see playerSpawnPoint in
+     11-branch-physics.js) */
+  const at = typeof playerSpawnPoint === "function" && !G.attract
+    ? playerSpawnPoint(13) : { x: W / 2, y: H * .6 };
   return {
-    x: W / 2, y: H * .6, vx: 0, vy: 0, r: 13, aim: -Math.PI / 2,
-    kb: { x: 0, y: 0 }, dashBuffer: 0, fireBuffer: 0, stretch: 0, stretchAng: -Math.PI / 2,
+    x: at.x, y: at.y, vx: 0, vy: 0, r: 13, aim: -Math.PI / 2,
+    kb: { x: 0, y: 0 }, env: { x: 0, y: 0 },
+    dashBuffer: 0, fireBuffer: 0, stretch: 0, stretchAng: -Math.PI / 2,
     hp: maxHp, maxHp, fireCd: 0, ammo: AMMO_MAX, ammoMax: AMMO_MAX, ammoRefillT: 0,
     hurtFlash: 0, hitFlash: 0, iframe: 0,
     dashMax: 1, dash: 1, dashCd: 0, dashing: 0, dashHits: null,
+    dashAng: null, dashSurge: 0, moveAng: -Math.PI / 2, moveT: 99,
     echoMax: 1 + lvlOf("echoCharge"), echo: 1 + lvlOf("echoCharge"), echoCd: 0,
     surge: 0, surgeActive: 0,
     shieldMax: lvlOf("shield"), shield: lvlOf("shield"), shieldCd: 0,
@@ -84,6 +151,10 @@ function clearWorld() {
   G.boss = null; G.trauma = 0; G.freeze = 0;
   G.stasis = []; G.chill = []; G.pillars = []; G.charges = []; G.omegaEchoes = [];
   G.wake = []; G.snap = []; G.safeWedge = null;
+  /* the room's own accumulated state — a shattered Glassfall floor, a
+     Terminus clock mid-escalation (see resetBranchLevel in
+     11-branch-physics.js) */
+  if (typeof resetBranchLevel === "function") resetBranchLevel();
 }
 function newRun(survival) {
   G.mode = "play"; G.attract = false; G.paused = false; G.drafting = false; G.carding = false;
@@ -283,12 +354,16 @@ function edgePoint(side) {
 function spawnEnemy(type, x, y, elite) {
   const d = EN[type];
   const tier = tierNow();
-  const hpMul = (1 + tier * .17 + G.loop * .5) * (elite ? 2.4 : 1);
-  const spMul = Math.min(1.65, 1 + tier * .024) * (elite ? 1.16 : 1);
+  /* a branch can be flatly harder than the baseline — see TIMELINES[].diff.
+     Health takes the multiplier whole; speed takes a third of it, because
+     speed is what makes a room unreadable rather than difficult. */
+  const diff = TL && TL.diff ? TL.diff : 1;
+  const hpMul = (1 + tier * .17 + G.loop * .5) * (elite ? 2.4 : 1) * diff;
+  const spMul = Math.min(1.65, 1 + tier * .024) * (elite ? 1.16 : 1) * (1 + (diff - 1) * .34);
   const e = {
     type, x, y, vx: 0, vy: 0, r: d.r, hp: d.hp * hpMul, maxHp: d.hp * hpMul,
     sp: d.sp * spMul, dmg: d.dmg, ang: rnd(TAU), wob: rnd(TAU), hit: 0, state: 0,
-    timer: rnd(.4, 1.6), born: 0, kb: { x: 0, y: 0 }, blink: 1, blinkT: rnd(3, 1),
+    timer: rnd(.4, 1.6), born: 0, sh: null, blink: 1, blinkT: rnd(3, 1),
     face: rnd(TAU), deflect: 0, fuse: 0, lockAng: 0, pop: 0, tether: 0, birth: 0, burst: 0,
     elite: !!elite, mod: "",
   };
@@ -440,7 +515,7 @@ function killEnemy(e) {
     for (let i = 0; i < 3; i++) {
       const a = rnd(TAU);
       const s = spawnEnemy("mote", e.x + Math.cos(a) * 18, e.y + Math.sin(a) * 18);
-      s.kb.x = Math.cos(a) * 220; s.kb.y = Math.sin(a) * 220;
+      shoveEnemy(s, a, SHOVE_SPORE_SCATTER);
     }
   }
   G.killed[e.type] = (G.killed[e.type] || 0) + 1;
@@ -479,19 +554,24 @@ function healPlayer(n) {
   p.hp = Math.min(p.maxHp, p.hp + n);
   if (p.hp - before > 3) text(p.x, p.y - 26, "+" + Math.round(p.hp - before), TH.core, 13);
 }
-function hurtPlayer(n, src) {
+/* `shot` marks the hit as carrying momentum — a projectile, and nothing
+   else. It is the only thing that moves the player (see the knockback
+   notes at the top of this file); contact, burn, tether and hazard lines
+   pass it as falsy and do damage where you stand. */
+function hurtPlayer(n, src, shot) {
   const p = G.player;
   if (!p || p.hp <= 0 || p.iframe > 0 || G.mode !== "play") return;
   if (typeof admGod !== "undefined" && admGod) return;
   if (G.boss && G.boss.type === "omega" && G.boss.phase >= 2) G.boss.flawless = 0;
-  /* the line from whatever hit you to you — knockback and sparks both ride
-     it. Hazards and the room itself have no source, and shove nothing. */
+  /* the line from whatever hit you to you — sparks ride it whatever the
+     source was, the shove only when the source was a projectile */
   const hitAng = src && src.x != null ? Math.atan2(p.y - src.y, p.x - src.x) : null;
+  const kbAng = shot ? hitAng : null;
   if (p.shield > 0 && n > 4) {
     p.shield--; p.shieldCd = 11; p.iframe = .5;
     ring(p.x, p.y, TH.core, 16, 92, .4, 3);
     burst(p.x, p.y, 22, TH.core, 1.2);
-    if (hitAng != null) { p.kb.x += Math.cos(hitAng) * KNOCKBACK_PLAYER_BLOCK; p.kb.y += Math.sin(hitAng) * KNOCKBACK_PLAYER_BLOCK; }
+    if (kbAng != null) { p.kb.x += Math.cos(kbAng) * KNOCKBACK_PLAYER_BLOCK; p.kb.y += Math.sin(kbAng) * KNOCKBACK_PLAYER_BLOCK; }
     Audio_.deflect(); shake(TRAUMA_BLOCK); flash(.08);
     text(p.x, p.y - 30, "deflected", TH.core, 13);
     return;
@@ -502,12 +582,12 @@ function hurtPlayer(n, src) {
   if (n > 5) {
     Audio_.hurt(); shake(clamp(n / 40, TRAUMA_HURT_MIN, TRAUMA_HURT_MAX)); flash(clamp(n / 90, .04, .2), "255,90,124");
     if (hitAng == null) burst(p.x, p.y, 8, "255,90,124", 1);
-    else {
-      directionalBurst(p.x, p.y, 8, "255,90,124", 1, hitAng);
-      /* scaled by the size of the hit, so a Warden's tearing leash nudges
-         you while a Revenant's cleave actually throws you */
-      const kbMag = KNOCKBACK_PLAYER_HURT * clamp(n / KNOCKBACK_HURT_REF, .25, 1);
-      p.kb.x += Math.cos(hitAng) * kbMag; p.kb.y += Math.sin(hitAng) * kbMag;
+    else directionalBurst(p.x, p.y, 8, "255,90,124", 1, hitAng);
+    if (kbAng != null) {
+      /* the power curve does the work: a Facet's thin ray nudges you, a
+         Howitzer shell throws you most of a body length */
+      const kbMag = playerKbMag(n);
+      p.kb.x += Math.cos(kbAng) * kbMag; p.kb.y += Math.sin(kbAng) * kbMag;
     }
     /* only a real hit stops the frame — chip and tick damage never would,
        or being tethered would stutter the whole room */
@@ -544,6 +624,9 @@ function fire() {
     if (G.heat >= 1) { G.jam = 1.25; G.heat = 1; Audio_.emberVent(); text(p.x, p.y - 34, "overheated", "255,120,80", 15); shake(.14); return; }
   }
   G.shotsThisWave = (G.shotsThisWave || 0) + 1;
+  /* never reset: Terminus' second-behind samples this to know when you
+     pulled the trigger without needing a hook of its own in here */
+  G.shotN = (G.shotN || 0) + 1;
   p.ammo = Math.max(0, p.ammo - 1);
   p.ammoRefillT = AMMO_REFILL_DELAY;
   const dmg = 11 * m.dmgMul;
@@ -582,7 +665,7 @@ function doRecall(c) {
   p.x = c.x; p.y = c.y; c.x = px; c.y = py;
   c.idx = 0; c.hit = .1;
   p.vx *= .18; p.vy *= .18;
-  p.kb.x *= .18; p.kb.y *= .18; /* you leave the shove behind with the position */
+  p.kb.x *= KB_DASH_KEEP; p.kb.y *= KB_DASH_KEEP; /* you leave the shove behind with the position */
   p.iframe = Math.max(p.iframe, .34);
   p.swapFlash = .5;
   p.hist.push({ x: p.x, y: p.y });
@@ -600,6 +683,13 @@ function doRecall(c) {
       { r: p.r, life: .18 + f * .26, a: .45, grow: .3 });
   }
   p.pop = 1;
+  /* a Time-Swap moves you without moving *through* anything, so the room
+     has to be re-checked at the far end: the decoy has been standing there
+     for seconds, and in Glassfall the pane under it may have dropped since.
+     `ported` marks the frame so nothing downstream mistakes a teleport for
+     a movement step. */
+  p.ported = 1;
+  playerBounds(p);
   G.chroma = Math.max(G.chroma, .8);
   text(p.x, p.y - 34, "swap", TH.echo, 15);
   Audio_.swap(); flash(.06, TH.echo); shake(TRAUMA_DASH_IMPACT); hitStop(HITSTOP_MEDIUM);
@@ -610,12 +700,19 @@ function doRecall(c) {
       for (const e of G.enemies.slice()) {
         if (dist(e, q) < R) {
           const a = Math.atan2(e.y - q.y, e.x - q.x);
-          e.kb.x += Math.cos(a) * 310; e.kb.y += Math.sin(a) * 310;
+          shoveEnemy(e, a, SHOVE_SWAP_WAVE);
           damageEnemy(e, 24 * m.swapWave * m.dmgMul, { noCrit: true, ang: a });
         }
       }
     }
   }
+}
+/* Where a dash goes. The movement heading if you have one, the one you had
+   a moment ago if you just let go, and the aim only if you have actually
+   been standing still. */
+function dashDir(p) {
+  if (p.moveT <= DASH_DIR_MEMORY) return p.moveAng;
+  return p.aim;
 }
 /* One button. With a decoy on the field it is a swap and nothing else —
    there is no dash to fumble for, and no modifier key to remember. */
@@ -630,9 +727,19 @@ function doDash() {
   }
   if (p.dash <= 0) return;
   p.dash--; p.dashCd = Math.max(p.dashCd, .85 * m.dashCdMul);
-  p.dashing = .17; p.iframe = .26; p.dashHits = []; p.pop = .7;
-  const a = p.aim;
-  p.vx = Math.cos(a) * 1180; p.vy = Math.sin(a) * 1180;
+  p.dashing = DASH_TIME; p.dashHits = []; p.pop = .7;
+  /* the i-frame covers the launch AND the landing, so the frames where you
+     are slow again but still next to whatever you dashed past are not the
+     frames that kill you */
+  p.iframe = Math.max(p.iframe, DASH_TIME + DASH_EXIT_IFRAME);
+  const a = dashDir(p);
+  p.dashAng = a;
+  /* a dash overrides whatever was shoving you: it is the escape, so it
+     wins the argument with the shove instead of being bent by it. Without
+     this a shove landing a frame before the press curves the dash into the
+     hazard you were dashing out of. */
+  p.kb.x *= KB_DASH_KEEP; p.kb.y *= KB_DASH_KEEP;
+  p.vx = Math.cos(a) * DASH_SPEED; p.vy = Math.sin(a) * DASH_SPEED;
   /* stamped here rather than inferred: this launch lands after the frame's
      velocity delta has already been sampled, so it would otherwise be missed */
   p.stretch = SQUASH_DASH_STRETCH; p.stretchAng = a;
@@ -649,7 +756,7 @@ function doDash() {
     for (const e of G.enemies.slice()) {
       if (dist(e, p) < R) {
         const ang = Math.atan2(e.y - p.y, e.x - p.x);
-        e.kb.x += Math.cos(ang) * 340; e.kb.y += Math.sin(ang) * 340;
+        shoveEnemy(e, ang, SHOVE_DASH_SHOCK);
         damageEnemy(e, 26 * m.dashShock * m.dmgMul, { noCrit: true, ang });
       }
     }
@@ -669,13 +776,69 @@ function summonEcho() {
   burst(p.x, p.y, 34, TH.echo, 1.3);
   flash(.07, TH.echo); Audio_.echo();
 }
+/* ---- moving the player, in pieces small enough to collide -------------
+   Movement and knockback are integrated together and SUBSTEPPED, and the
+   room's walls are enforced after every substep. That matters for three
+   things at once:
+
+     · a dash covers up to 59px in one frame at the 20fps floor, and arena
+       walls are thinner than that — one big step would post you straight
+       through a wall or across a glass gap
+     · a shove landing mid-dash adds to the same delta rather than being
+       applied after it, so the two can't take turns pushing you through
+       opposite faces of the same wall
+     · a shove into a wall spends itself on the wall instead of
+       accumulating behind it and firing you out the far side later
+
+   Chamber 09 has no branch geometry, so it falls back to the plain
+   rectangle; everything else goes through BRANCHFN.bounds (see
+   11-branch-physics.js). */
+function playerBounds(p) {
+  const pad = 20;
+  if (BRANCHFN.bounds && !G.attract) { BRANCHFN.bounds(p, pad); return; }
+  if (p.x < pad) { p.x = pad; p.vx = Math.abs(p.vx) * .3; p.kb.x = Math.abs(p.kb.x) * .3; }
+  if (p.x > W - pad) { p.x = W - pad; p.vx = -Math.abs(p.vx) * .3; p.kb.x = -Math.abs(p.kb.x) * .3; }
+  if (p.y < pad) { p.y = pad; p.vy = Math.abs(p.vy) * .3; p.kb.y = Math.abs(p.kb.y) * .3; }
+  if (p.y > H - pad) { p.y = H - pad; p.vy = -Math.abs(p.vy) * .3; p.kb.y = -Math.abs(p.kb.y) * .3; }
+}
+function stepPlayer(p, dt) {
+  /* three channels of motion, all integrated together so the walls arbitrate
+     between them instead of each one getting its own unchecked turn:
+       vx/vy  what you are steering, and the dash
+       kb     a projectile's shove, which decays on its own
+       env    the room pushing (an Emberwake heatwave, a current) — SET by
+              the branch each frame rather than accumulated, so it stops the
+              instant the room stops rather than coasting */
+  const tx = p.vx + p.kb.x + p.env.x, ty = p.vy + p.kb.y + p.env.y;
+  const len = Math.hypot(tx, ty) * dt;
+  const n = Math.min(10, Math.max(1, Math.ceil(len / MOVE_SUBSTEP)));
+  const sd = dt / n;
+  const kd = Math.pow(PLAYER_KB_DECAY, sd);
+  for (let i = 0; i < n; i++) {
+    p.x += (p.vx + p.kb.x + p.env.x) * sd; p.y += (p.vy + p.kb.y + p.env.y) * sd;
+    p.kb.x *= kd; p.kb.y *= kd;
+    playerBounds(p);
+  }
+}
 function updatePlayer(dt, input) {
   const p = G.player, m = G.mods;
   const prevVx = p.vx, prevVy = p.vy;
+  p.ported = 0;
   p.iframe = Math.max(0, p.iframe - dt);
   p.hurtFlash = Math.max(0, p.hurtFlash - dt * 2.2);
   p.hitFlash = Math.max(0, (p.hitFlash || 0) - dt);
+  const wasDashing = p.dashing > 0;
   p.dashing = Math.max(0, p.dashing - dt);
+  /* the hand-off: the launch does not just stop, it drops you into the
+     speed burst still moving the way you dashed, so the escape keeps
+     carrying for DASH_SURGE_TIME instead of dumping you on the spot */
+  if (wasDashing && p.dashing <= 0 && p.dashAng != null) {
+    const exit = PLAYER_SPEED * m.speedMul * DASH_SURGE_MUL * DASH_EXIT_SPEED;
+    p.vx = Math.cos(p.dashAng) * exit; p.vy = Math.sin(p.dashAng) * exit;
+    p.dashSurge = DASH_SURGE_TIME;
+    p.dashAng = null;
+  }
+  p.dashSurge = Math.max(0, p.dashSurge - dt);
   p.surgeActive = Math.max(0, p.surgeActive - dt);
   p.recallCd = Math.max(0, p.recallCd - dt);
   p.swapFlash = Math.max(0, p.swapFlash - dt * 2.2);
@@ -699,6 +862,11 @@ function updatePlayer(dt, input) {
     }
   }
   p.aim = Math.atan2(input.aimY - p.y, input.aimX - p.x);
+  /* the steering heading, kept separate from the aim because the dash runs
+     on it (see dashDir) */
+  const mlen = Math.hypot(input.mx, input.my);
+  if (mlen > .05) { p.moveAng = Math.atan2(input.my, input.mx); p.moveT = 0; }
+  else p.moveT += dt;
 
   if (p.dashing > 0) {
     p.vx *= Math.pow(.12, dt); p.vy *= Math.pow(.12, dt);
@@ -711,14 +879,15 @@ function updatePlayer(dt, input) {
         p.dashHits.push(e);
         const a = Math.atan2(e.y - p.y, e.x - p.x);
         damageEnemy(e, 42 * m.dashDmgMul * m.dmgMul, { ang: a });
-        e.kb.x += Math.cos(a) * 260; e.kb.y += Math.sin(a) * 260;
+        shoveEnemy(e, a, SHOVE_DASH_THROUGH);
         e.pop = Math.max(e.pop || 0, .8);
         shock(e.x, e.y, { r0: e.r, r1: e.r * 3.2, life: .22, col: TH.core, w: 3 });
         hitStop(HITSTOP_MEDIUM); shake(TRAUMA_DASH_IMPACT);
       }
     }
   } else {
-    const sp = PLAYER_SPEED * m.speedMul * (p.surgeActive > 0 ? SURGE_SPEED_MUL : 1);
+    const sp = PLAYER_SPEED * m.speedMul * (p.surgeActive > 0 ? SURGE_SPEED_MUL : 1)
+      * (p.dashSurge > 0 ? DASH_SURGE_MUL : 1);
     /* coming off the keys pulls harder than getting on them, so letting go
        stops you instead of skating you across the floor */
     const rate = Math.hypot(input.mx, input.my) > .05 ? PLAYER_ACCEL : PLAYER_DECEL;
@@ -732,23 +901,7 @@ function updatePlayer(dt, input) {
   if (speedNow > 15) p.stretchAng = Math.atan2(p.vy, p.vx);
   else if (stretchTo > 0 && (p.vx !== prevVx || p.vy !== prevVy)) p.stretchAng = Math.atan2(p.vy - prevVy, p.vx - prevVx);
   p.stretch = Math.max(stretchTo, approach(p.stretch || 0, 0, SQUASH_DECAY, dt));
-  p.x += p.vx * dt; p.y += p.vy * dt;
-  /* knockback rides on top of movement, and lands before the walls below
-     get their say, so a shove can never push you through one */
-  p.x += p.kb.x * dt; p.y += p.kb.y * dt;
-  p.kb.x *= Math.pow(PLAYER_KB_DECAY, dt); p.kb.y *= Math.pow(PLAYER_KB_DECAY, dt);
-  /* the room's walls: a branch can reshape this floor entirely (see
-     BRANCHFN.bounds in 11-branch-physics.js) — Chamber 09 has none, so it
-     keeps the plain rectangle below */
-  const pad = 20;
-  if (BRANCHFN.bounds && !G.attract) {
-    BRANCHFN.bounds(p, pad);
-  } else {
-    if (p.x < pad) { p.x = pad; p.vx = Math.abs(p.vx) * .3; p.kb.x = Math.abs(p.kb.x) * .3; }
-    if (p.x > W - pad) { p.x = W - pad; p.vx = -Math.abs(p.vx) * .3; p.kb.x = -Math.abs(p.kb.x) * .3; }
-    if (p.y < pad) { p.y = pad; p.vy = Math.abs(p.vy) * .3; p.kb.y = Math.abs(p.kb.y) * .3; }
-    if (p.y > H - pad) { p.y = H - pad; p.vy = -Math.abs(p.vy) * .3; p.kb.y = -Math.abs(p.kb.y) * .3; }
-  }
+  stepPlayer(p, dt);
   /* held or tapped, the press is remembered for a beat: if the cooldown
      clears inside the window the shot goes out on that frame instead of
      needing a second press */

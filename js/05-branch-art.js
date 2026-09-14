@@ -8,11 +8,11 @@
    ===================================================================== */
 
 /* ---- impact read (shared by every enemy, applied in drawEnemy) ---------
-   Knockback doubles as the squash driver, so these are the only knobs for
-   how hard a shoved enemy deforms. */
-const KB_STRETCH_MIN = 4;     /* kb speed below this doesn't deform anything */
-const KB_STRETCH_NORM = 1100; /* kb speed mapping to a full-scale stretch — one pulse
-                                 lands near .05, a dash or swap wave pins the cap */
+   The shove tween doubles as the squash driver: shoveStretch() in
+   09-enemies-and-render.js returns 0..1 for how far into a shove the body
+   is and how hard it was hit, and this is the only knob for how much of
+   that turns into deformation. One pulse lands near .03, a dash-through
+   near .16, the heaviest shoves pin the cap. */
 const KB_STRETCH_MAX = .2;    /* stretch ceiling, as a fraction of scale */
 const HIT_POP = .13;          /* extra scale at the peak of a hit flash */
 
@@ -1432,13 +1432,12 @@ function drawEnemy(e) {
     softShadow(e.x, e.y, e.r, e.r);
   ctx.save();
   ctx.translate(e.x, e.y);
-  /* whatever is shoving it also stretches it along the shove — the knockback
-     vector decays on its own, so the squash rides out with it */
-  const kbSpd = Math.hypot(e.kb.x, e.kb.y);
-  if (kbSpd > KB_STRETCH_MIN) {
-    const kbAng = Math.atan2(e.kb.y, e.kb.x);
-    const st = clamp(kbSpd / KB_STRETCH_NORM, 0, KB_STRETCH_MAX);
-    ctx.rotate(kbAng); ctx.scale(1 + st, 1 - st * .55); ctx.rotate(-kbAng);
+  /* the shove stretches the body along its own direction, hardest during
+     the punch and back to round by the time the body has settled */
+  const shf = shoveStretch(e.sh);
+  if (shf > .02) {
+    const st = shf * KB_STRETCH_MAX;
+    ctx.rotate(e.sh.ang); ctx.scale(1 + st, 1 - st * .55); ctx.rotate(-e.sh.ang);
   }
   const born = e.born < .35 ? .4 + (e.born / .35) * .6 : 1;
   const sc = born * (1 + (e.pop || 0) * .3 + clamp((e.hit || 0) / HIT_FLASH_ENEMY, 0, 1) * HIT_POP);
