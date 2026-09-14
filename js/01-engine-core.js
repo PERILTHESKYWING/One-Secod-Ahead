@@ -79,12 +79,36 @@ function syncCosmetics() {
 const owns = (id) => !!SAVE.cosmetics.owned[id];
 
 /* ---------------- colour + theme ------------------------------------ */
-function rgbOf(s) { return s.split(",").map(Number); }
+/* ---- colour helpers, memoised ----------------------------------------
+   These are called several times per enemy per frame (every ART function
+   shades its own body, rim and highlight out of the base colour, and ecol()
+   re-derives the themed colour for each one). Unmemoised, each call split a
+   string into a fresh array, mapped it to a second array, and concatenated a
+   new string — hundreds of throwaway allocations a frame, which showed up as
+   steady GC pressure under load.
+
+   The inputs are drawn from a fixed vocabulary — 36 enemy colours, a handful
+   of multipliers, five themes — so the cache is small and saturates within a
+   second of play. It is cleared on a theme change, since the theme is baked
+   into ecol()'s results. */
+const rgbCache = new Map();
+function rgbOf(s) {
+  let v = rgbCache.get(s);
+  if (!v) { v = s.split(",").map(Number); rgbCache.set(s, v); }
+  return v;
+}
+let shadeCache = new Map();
 function shade(s, mul, mix, mixCol) {
-  let [r, g, b] = rgbOf(s);
-  r *= mul; g *= mul; b *= mul;
-  if (mix) { const [mr, mg, mb] = mixCol; r = lerp(r, mr, mix); g = lerp(g, mg, mix); b = lerp(b, mb, mix); }
-  return Math.round(clamp(r, 0, 255)) + "," + Math.round(clamp(g, 0, 255)) + "," + Math.round(clamp(b, 0, 255));
+  const key = mix ? s + "|" + mul + "|" + mix + "|" + mixCol : s + "|" + mul;
+  let out = shadeCache.get(key);
+  if (out !== undefined) return out;
+  const v = rgbOf(s);
+  let r = v[0] * mul, g = v[1] * mul, b = v[2] * mul;
+  if (mix) { r = lerp(r, mixCol[0], mix); g = lerp(g, mixCol[1], mix); b = lerp(b, mixCol[2], mix); }
+  out = Math.round(clamp(r, 0, 255)) + "," + Math.round(clamp(g, 0, 255)) + "," + Math.round(clamp(b, 0, 255));
+  if (shadeCache.size > 4000) shadeCache.clear();
+  shadeCache.set(key, out);
+  return out;
 }
 const THEMES = {
   dark: {
@@ -132,7 +156,15 @@ const THEMES = {
   },
 };
 let TH = THEMES.dark;
-function ecol(base) { return shade(base, TH.enemyMul, TH.enemyMix, TH.mixCol); }
+/* ecol() is the hottest of the lot — once per enemy per frame at minimum,
+   and several times inside most ART functions. Its result depends only on
+   the base colour and the theme, so it gets its own direct map. */
+let ecolCache = new Map();
+function ecol(base) {
+  let v = ecolCache.get(base);
+  if (v === undefined) { v = shade(base, TH.enemyMul, TH.enemyMix, TH.mixCol); ecolCache.set(base, v); }
+  return v;
+}
 const PAL_ORDER = ["dark", "light", "synthwave", "gameboy", "solar"];
 function ownedPalettes() { return PAL_ORDER.filter((id) => owns("pal_" + id)); }
 function nextPalette() {
@@ -148,6 +180,9 @@ function setTheme(id, quiet) {
   const sw = $("#themeSwap");
   if (sw) sw.querySelector("span").textContent = THEMES[nextPalette()].label;
   gradCache = {};
+  ecolCache = new Map();   /* the theme is baked into every cached colour */
+  shadeCache = new Map();
+  if (typeof glowCache !== "undefined") glowCache.clear();
   backdropDirty = true;
   persist();
   if (!quiet) { drawBestiary(); Audio_.ui(); }

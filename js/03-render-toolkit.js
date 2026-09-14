@@ -3,18 +3,61 @@
 const cv = $("#game");
 let ctx = cv.getContext("2d", { alpha: false });
 let W = 0, H = 0, DPR = 1;
+/* Two small buffers, not one. The bloom used to downscale the whole main
+   canvas into a quarter-size buffer WITH A BLUR FILTER SET, in a single
+   drawImage. That makes the browser blur at the source resolution and then
+   resample — measured at 2x display scale, that one call was 12ms of an
+   18ms frame, which is the entire reason the game dropped frames in a busy
+   fight. Doing the two jobs separately — a plain downscale into `bloomC`,
+   then a blur from `bloomC` into `bloom2C` — blurs a 320x200 image instead
+   of a 2560x1600 one, for the same picture. */
 const bloomC = document.createElement("canvas"); const bctx = bloomC.getContext("2d");
-const backC = document.createElement("canvas"); const kctx = backC.getContext("2d");
+const bloom2C = document.createElement("canvas"); const b2ctx = bloom2C.getContext("2d");
+/* The backdrop is fully opaque — it starts with a gradient fill covering the
+   whole buffer — so it is declared opaque. A source-over blit from a canvas
+   that CAN be transparent has to read and blend every destination pixel;
+   from an opaque one the compositor can take the fast path. It is blitted
+   whole every frame, so this is worth stating explicitly. */
+const backC = document.createElement("canvas");
+const kctx = backC.getContext("2d", { alpha: false });
 let backdropDirty = true, gradCache = {};
 
+/* ---- render resolution ------------------------------------------------
+   On a 2x display the canvas is four times the pixels, and measured, that is
+   the single largest performance factor in the game: the identical scene
+   runs at half the framerate at DPR 2 that it does at DPR 1. `renderScale`
+   is a multiplier on the backing-store resolution that the quality ladder
+   turns down under load (see adaptQuality in 14-branch-shell.js). The canvas
+   is still laid out at full CSS size, so the picture is the same size and
+   only slightly softer — which is a far better trade than dropping frames. */
+let renderScale = 1;
+function deviceScale() {
+  /* Never below one device pixel per CSS pixel. The scale rung exists to
+     spend the EXCESS resolution a high-density display asks for — on a 2x
+     screen it can go 2.0 -> 1.36 -> 1.0 and still be pixel-perfect. On a 1x
+     screen there is no excess to spend, so it correctly does nothing rather
+     than blurring a display that was already only just sharp enough. */
+  return Math.max(1, Math.min(devicePixelRatio || 1, 2) * renderScale);
+}
 function resize() {
-  DPR = Math.min(devicePixelRatio || 1, 2);
+  DPR = deviceScale();
   W = innerWidth; H = innerHeight;
-  cv.width = Math.floor(W * DPR); cv.height = Math.floor(H * DPR);
+  cv.width = Math.max(1, Math.floor(W * DPR)); cv.height = Math.max(1, Math.floor(H * DPR));
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   bloomC.width = Math.max(2, W >> 2); bloomC.height = Math.max(2, H >> 2);
-  backC.width = Math.floor(W + 120); backC.height = Math.floor(H + 120);
-  backdropDirty = true; gradCache = {};
+  bloom2C.width = bloomC.width; bloom2C.height = bloomC.height;
+  /* The backdrop is blitted whole, every frame. Sized in CSS pixels it had
+     to be rescaled up to the device resolution on every one of those blits —
+     31% of the frame at DPR 2, for a picture that never changes. Sized in
+     DEVICE pixels it is a straight 1:1 copy instead, and sharper. */
+  backC.width = Math.max(1, Math.floor((W + 120) * DPR));
+  backC.height = Math.max(1, Math.floor((H + 120) * DPR));
+  backdropDirty = true; gradCache = {}; glowCache.clear();
+}
+function setRenderScale(s) {
+  if (Math.abs(s - renderScale) < .01) return;
+  renderScale = s;
+  resize();
 }
 addEventListener("resize", resize);
 
@@ -29,13 +72,16 @@ function bodyGrad(key, r, c1, c2) {
   }
   return g;
 }
+/* Ground shadows. The old version set ctx.filter on every call; assigning
+   the filter property forces the canvas to flush its state even when the
+   value is "none", and at one call per enemy per frame that was pure
+   overhead for no visual effect at all. */
 function softShadow(x, y, rx, ry) {
   ctx.save();
   ctx.globalAlpha = TH.shadowA;
   ctx.fillStyle = "rgb(" + TH.shadow + ")";
   ctx.beginPath();
   ctx.ellipse(x + rx * .18, y + ry * 1.35, rx * .95, ry * .42, 0, 0, TAU);
-  ctx.filter = "none";
   ctx.fill();
   ctx.restore();
 }
@@ -141,11 +187,57 @@ function rrect(x, y, w, h, r) {
 function tri(x1, y1, x2, y2, x3, y3) {
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath();
 }
+/* Every enemy's ART function calls this at least once, so it was building a
+   fresh radial gradient per enemy per frame. The gradient only depends on
+   the colour, the alpha and the radius, so it is built once at the origin
+   and translated into place — the radius is rounded to keep the key space
+   small, which is invisible on a soft glow. */
+const glowCache = new Map();
 function glowPool(x, y, r, col, a) {
-  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-  g.addColorStop(0, "rgba(" + col + "," + a + ")");
-  g.addColorStop(1, "rgba(" + col + ",0)");
-  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); ctx.fill();
+  const rr = Math.max(2, Math.round(r));
+  const aa = Math.round(a * 40) / 40;
+  const key = col + "|" + aa + "|" + rr;
+  let g = glowCache.get(key);
+  if (!g) {
+    g = ctx.createRadialGradient(0, 0, 0, 0, 0, rr);
+    g.addColorStop(0, "rgba(" + col + "," + aa + ")");
+    g.addColorStop(1, "rgba(" + col + ",0)");
+    if (glowCache.size > 900) glowCache.clear();
+    glowCache.set(key, g);
+  }
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(0, 0, rr, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+/* The batched form, for callers drawing in WORLD space. Several ART
+   functions cast their own shadow from inside a translated and rotated
+   context, where the coordinates are local and deferring them would put the
+   shadow somewhere else entirely — those keep the immediate softShadow()
+   above. Only drawEnemy's own ground shadow, which is genuinely world-space,
+   goes through here, and that is the one there are dozens of. */
+let shadowBatch = null;
+function softShadowBatched(x, y, rx, ry) {
+  if (shadowBatch) { shadowBatch.push(x, y, rx, ry); return; }
+  softShadow(x, y, rx, ry);
+}
+function beginShadows() { shadowBatch = []; }
+function flushShadows() {
+  const b = shadowBatch;
+  shadowBatch = null;
+  if (!b || !b.length) return;
+  ctx.save();
+  ctx.globalAlpha = TH.shadowA;
+  ctx.fillStyle = "rgb(" + TH.shadow + ")";
+  ctx.beginPath();
+  for (let i = 0; i < b.length; i += 4) {
+    const x = b[i], y = b[i + 1], rx = b[i + 2], ry = b[i + 3];
+    ctx.moveTo(x + rx * .18 + rx * .95, y + ry * 1.35);
+    ctx.ellipse(x + rx * .18, y + ry * 1.35, rx * .95, ry * .42, 0, 0, TAU);
+  }
+  ctx.fill();
+  ctx.restore();
 }
 /* an eye with a lid, an iris and an angry brow — the difference between a
    shape and a face is entirely in this function */
@@ -300,9 +392,12 @@ function ACC() { return TH.tint || curLevel().accent; }
 function bakeBackdrop() {
   const L = curLevel();
   const cols = TH.bg || (TH.dim ? L.dark : L.light);
-  const w = backC.width, h = backC.height;
-  kctx.setTransform(1, 0, 0, 1, 0, 0);
-  kctx.clearRect(0, 0, w, h);
+  /* authored in CSS-pixel space and scaled up by the transform, so the
+     backdrop code below is unchanged by the device-resolution buffer */
+  const w = W + 120, h = H + 120;
+  kctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  kctx.fillStyle = cols[1];
+  kctx.fillRect(0, 0, w, h);
   const g = kctx.createRadialGradient(w * .5, h * .42, 20, w * .5, h * .5, Math.max(w, h) * .78);
   g.addColorStop(0, cols[0]); g.addColorStop(1, cols[1]);
   kctx.fillStyle = g; kctx.fillRect(0, 0, w, h);

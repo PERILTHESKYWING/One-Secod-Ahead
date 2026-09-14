@@ -1425,11 +1425,30 @@ function eliteAura(e, c) {
   ctx.restore();
   glowPool(0, 0, r * 2.2, "255,214,138", .1 + Math.sin(t * 4) * .03);
 }
+/* An enemy sprite cache was built here and removed again, which is worth
+   recording so nobody rebuilds it. drawEnemy is the single largest consumer
+   of paint calls in the game — about twenty path fills per body per frame —
+   so caching each body's art into an offscreen canvas and blitting it looks
+   like the obvious win, and a first measurement appeared to show +21%.
+
+   It does not survive a clean A/B. Measured at the SAME quality rung, with
+   only the cache toggled: +2fps at 1x display scale, and 22% SLOWER at 2x,
+   where every cache miss re-renders the art into a double-resolution buffer
+   and then blits it, at a hit rate that falls to about half. The earlier
+   +21% was an artifact of comparing two different quality rungs, which also
+   changed the particle budget.
+
+   It is also not free visually: a good third of the ART functions draw with
+   per-frame randomness, and caching a frame of that freezes the shimmer.
+
+   The real costs turned out to be elsewhere entirely — see the bloom in
+   render(), the render scale in 03-render-toolkit.js, and the batching in
+   drawParts / the hostile pass. */
 function drawEnemy(e) {
   const d = EN[e.type] || EN.husk;
   const c = e.elite ? shade(ecol(d.col), 1.12, .18, [255, 226, 150]) : ecol(d.col);
   if (e.type !== "weaver" && e.type !== "mirror" && e.type !== "revenant" && e.type !== "hexer")
-    softShadow(e.x, e.y, e.r, e.r);
+    softShadowBatched(e.x, e.y, e.r, e.r);
   ctx.save();
   ctx.translate(e.x, e.y);
   /* the shove stretches the body along its own direction, hardest during
