@@ -33,6 +33,10 @@ const CONTACT_SEPARATION = 150;
    the note in render() for why this is a performance constant, not a taste
    one. Ordinary combat trauma peaks well under this. */
 const SPLIT_MIN = .5;
+/* reused across frames so the batching itself allocates nothing */
+const hostileBuckets = new Map();
+let lightPoolGrad = null, lightPoolTheme = "";
+let bloomTick = 0;
 const SHAKE_OFFSET = 20;  /* px of camera travel at full trauma */
 const SHAKE_DIR_BIAS = 6; /* px of extra push along a directional hit */
 const SHAKE_TILT = .011;  /* radians of camera roll at full trauma */
@@ -787,15 +791,35 @@ const FONT = '"Inter Tight", Inter, system-ui, sans-serif';
 function drawWorld() {
   const p = G.player;
   if (backdropDirty) bakeBackdrop();
-  const ox = p ? clamp((p.x - W / 2) * .02, -50, 50) : 0;
-  const oy = p ? clamp((p.y - H / 2) * .02, -50, 50) : 0;
-  ctx.drawImage(backC, -60 - ox, -60 - oy);
+  /* The parallax offset, SNAPPED TO WHOLE DEVICE PIXELS. This matters far
+     more than it looks: drawImage at a fractional destination has to
+     resample the entire source, so an un-snapped offset meant the whole
+     backdrop — over two million pixels — was bilinearly filtered every
+     single frame. Measured at 2x display resolution that one call was a
+     third of the frame. Snapped, it is a straight copy, and a 2px parallax
+     quantisation is not visible on a background that drifts this slowly. */
+  const q = DPR || 1;
+  const ox = p ? Math.round(clamp((p.x - W / 2) * .02, -50, 50) * q) / q : 0;
+  const oy = p ? Math.round(clamp((p.y - H / 2) * .02, -50, 50) * q) / q : 0;
+  /* explicit destination size: the buffer is in device pixels and the
+     context is scaled by DPR, so this lands 1:1 with no resampling */
+  ctx.drawImage(backC, -60 - ox, -60 - oy, W + 120, H + 120);
   /* light pool under the player */
   if (p) {
-    const a = ctx.createRadialGradient(p.x, p.y, 10, p.x, p.y, 340);
-    a.addColorStop(0, "rgba(" + TH.core + "," + (TH.dim ? .07 : .05) + ")");
-    a.addColorStop(1, "rgba(" + TH.core + ",0)");
-    ctx.fillStyle = a; ctx.fillRect(0, 0, W, H);
+    /* the pool follows the player, so the gradient is built once at the
+       origin and moved with the transform rather than rebuilt every frame
+       around new coordinates */
+    if (!lightPoolGrad || lightPoolTheme !== TH.id) {
+      lightPoolGrad = ctx.createRadialGradient(0, 0, 10, 0, 0, 340);
+      lightPoolGrad.addColorStop(0, "rgba(" + TH.core + "," + (TH.dim ? .07 : .05) + ")");
+      lightPoolGrad.addColorStop(1, "rgba(" + TH.core + ",0)");
+      lightPoolTheme = TH.id;
+    }
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.fillStyle = lightPoolGrad;
+    ctx.fillRect(-340, -340, 680, 680);
+    ctx.restore();
   }
   for (const d of G.dust) {
     ctx.globalAlpha = TH.dustA * d.z * .55;
@@ -862,31 +886,77 @@ function drawWorld() {
   drawRecallLink();
   drawCorpses();
   for (const c of G.echoes) drawEcho(c);
+  /* every body's ground shadow collected into one fill instead of one each */
+  beginShadows();
   for (const e of G.enemies) drawEnemy(e);
+  flushShadows();
   for (const e of G.enemies) { drawBrand(e); drawSpecialPlate(e); }
   /* the walls go down here, between the enemies and the player: a body
      standing behind cover is hidden by it, which is what makes a player
      read the wall as cover instead of as a pattern on the floor. The
      player stays on top so you never lose yourself behind one. */
   if (BRANCHFN.walls && !G.attract) { ctx.save(); try { BRANCHFN.walls(); } catch (err) {} ctx.restore(); }
-  for (const b of G.bullets) {
-    const g = ctx.createLinearGradient(b.x, b.y, b.x - b.vx * .02, b.y - b.vy * .02);
-    const c = b.echo ? TH.echo : TH.core;
-    g.addColorStop(0, "rgba(" + TH.rim + ",.95)");
-    g.addColorStop(.35, "rgba(" + c + ",.9)");
-    g.addColorStop(1, "rgba(" + c + ",0)");
-    ctx.strokeStyle = g; ctx.lineWidth = b.echo ? 3 : 3.6; ctx.lineCap = "round";
-    ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * .019, b.y - b.vy * .019); ctx.stroke();
+  /* Your pulses. Each one used to build its own linear gradient every
+     frame — a fresh gradient object per bullet per frame, which is an
+     allocation and a shader setup for a 20px streak. Two flat strokes in
+     one path each read the same at speed: a wide soft tail and a bright
+     core over it. */
+  if (G.bullets.length) {
+    ctx.lineCap = "round";
+    for (let pass = 0; pass < 2; pass++) {
+      for (const echo of [false, true]) {
+        let any = false;
+        const c = echo ? TH.echo : TH.core;
+        ctx.strokeStyle = pass ? "rgba(" + TH.rim + ",.95)" : "rgba(" + c + ",.7)";
+        ctx.lineWidth = (echo ? 3 : 3.6) * (pass ? .42 : 1);
+        ctx.beginPath();
+        for (const b of G.bullets) {
+          if (!!b.echo !== echo) continue;
+          any = true;
+          const f = pass ? .008 : .019;
+          ctx.moveTo(b.x, b.y);
+          ctx.lineTo(b.x - b.vx * f, b.y - b.vy * f);
+        }
+        if (any) ctx.stroke();
+      }
+    }
   }
-  for (const h of G.hostiles) {
-    ctx.save(); ctx.translate(h.x, h.y); ctx.rotate(h.spin);
-    ctx.fillStyle = "rgb(" + h.col + ")";
-    ctx.beginPath(); ctx.arc(0, 0, h.r, 0, TAU); ctx.fill();
+  /* Enemy fire. Every shot was save / translate / rotate / three paths /
+     restore — six paint calls apiece, and a screen full of fire is the case
+     the player actually complains about. Batched by colour: one path for
+     every body, one for every rim arc, one for every highlight. The spin
+     only ever rotated a radially symmetric disc, so nothing is lost. */
+  if (G.hostiles.length) {
+    hostileBuckets.clear();
+    for (const h of G.hostiles) {
+      let list = hostileBuckets.get(h.col);
+      if (!list) { list = []; hostileBuckets.set(h.col, list); }
+      list.push(h);
+    }
+    for (const [col, list] of hostileBuckets) {
+      ctx.fillStyle = "rgb(" + col + ")";
+      ctx.beginPath();
+      for (const h of list) { ctx.moveTo(h.x + h.r, h.y); ctx.arc(h.x, h.y, h.r, 0, TAU); }
+      ctx.fill();
+    }
     ctx.strokeStyle = "rgba(" + TH.rim + ",.55)"; ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.arc(0, 0, h.r + 3, .4, 2.6); ctx.stroke();
+    ctx.beginPath();
+    for (const h of G.hostiles) {
+      const r = h.r + 3, a0 = h.spin + .4;
+      ctx.moveTo(h.x + Math.cos(a0) * r, h.y + Math.sin(a0) * r);
+      ctx.arc(h.x, h.y, r, a0, h.spin + 2.6);
+    }
+    ctx.stroke();
     ctx.fillStyle = "rgba(" + TH.rim + ",.85)";
-    ctx.beginPath(); ctx.arc(-h.r * .25, -h.r * .25, h.r * .35, 0, TAU); ctx.fill();
-    ctx.restore();
+    ctx.beginPath();
+    for (const h of G.hostiles) {
+      const o = h.r * .25, rr = h.r * .35;
+      const ca = Math.cos(h.spin), sa = Math.sin(h.spin);
+      const hx = h.x + (-o * ca + o * sa), hy = h.y + (-o * sa - o * ca);
+      ctx.moveTo(hx + rr, hy);
+      ctx.arc(hx, hy, rr, 0, TAU);
+    }
+    ctx.fill();
   }
   drawPlayer();
   for (const b of G.beams) {
@@ -993,8 +1063,10 @@ function drawCursor() {
 function render() {
   const s = SAVE.settings;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-  ctx.fillStyle = "rgb(" + TH.deep + ")";
-  ctx.fillRect(0, 0, W, H);
+  /* No full-screen clear here. drawWorld() immediately blits an opaque
+     backdrop sized W+120 from an offset of -60, so it covers every pixel
+     including everything the camera shake can expose — clearing first was a
+     second full-screen paint per frame that nothing ever saw. */
   ctx.save();
   if (G.trauma > 0) {
     /* raising trauma to a power is what keeps chip damage from wobbling the
@@ -1010,15 +1082,34 @@ function render() {
   /* the bloom survives one rung longer than the split does — it is the
      cheaper of the two and it carries most of the look */
   if (s.bloom && G.quality > .5) {
-    bctx.setTransform(1, 0, 0, 1, 0, 0);
-    bctx.clearRect(0, 0, bloomC.width, bloomC.height);
-    bctx.filter = TH.dim ? "blur(3px) brightness(1.5) saturate(1.2)" : "blur(3px) brightness(1.15) saturate(1.3)";
-    bctx.drawImage(cv, 0, 0, bloomC.width, bloomC.height);
-    bctx.filter = "none";
+    /* The buffer is rebuilt every OTHER frame and composited every frame.
+       Reading the whole canvas back down to bloom size is the expensive half
+       and it is producing a soft, wide glow — one frame of latency on that
+       is not perceptible, and it halves what the effect costs. */
+    bloomTick ^= 1;
+    if (!bloomTick) {
+      const bw = bloomC.width, bh = bloomC.height;
+      /* 1. downscale, unfiltered. `copy` skips blending the previous frame. */
+      bctx.setTransform(1, 0, 0, 1, 0, 0);
+      bctx.globalCompositeOperation = "copy";
+      /* the blur in stage 2 hides any aliasing this introduces, so the
+         expensive smooth minification buys nothing here */
+      bctx.imageSmoothingEnabled = false;
+      bctx.drawImage(cv, 0, 0, bw, bh);
+      bctx.globalCompositeOperation = "source-over";
+      /* 2. blur the small buffer — a fortieth of the pixels the old version
+         ran the same filter over */
+      b2ctx.setTransform(1, 0, 0, 1, 0, 0);
+      b2ctx.globalCompositeOperation = "copy";
+      b2ctx.filter = TH.dim ? "blur(2px) brightness(1.5) saturate(1.2)" : "blur(2px) brightness(1.15) saturate(1.3)";
+      b2ctx.drawImage(bloomC, 0, 0);
+      b2ctx.filter = "none";
+      b2ctx.globalCompositeOperation = "source-over";
+    }
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.globalAlpha = TH.bloom;
-    ctx.drawImage(bloomC, 0, 0, W, H);
+    ctx.drawImage(bloom2C, 0, 0, W, H);
     /* The chromatic split: two extra FULL-SCREEN "lighter" composites of the
        bloom buffer. Measured, that is 6.5ms a frame on its own — half the
        entire render pass, and more than the bloom it decorates.
@@ -1036,7 +1127,7 @@ function render() {
     const split = Math.max(G.trauma, G.chroma);
     if (TH.dim && split > SPLIT_MIN && G.quality > .85) {
       ctx.globalAlpha = .3 * split;
-      ctx.drawImage(bloomC, -9 * split, 0, W, H);
+      ctx.drawImage(bloom2C, -9 * split, 0, W, H);
     }
     ctx.restore();
   }

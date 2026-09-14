@@ -118,24 +118,68 @@ function stepRings(list, dt) {
     r.r = lerp(r.r, r.to, 1 - Math.exp(-9 * dt));
   }
 }
+/* ---- particles, batched ------------------------------------------------
+   A particle used to be its own beginPath / arc / fill. A busy frame carries
+   several hundred of them, and several hundred separate path rasterizations
+   is one of the largest costs in the whole renderer — each one is a state
+   setup, a path build and a fill, for something a few pixels across.
+
+   They are batched instead. A fill is determined by exactly two things — the
+   colour and the alpha — so particles are bucketed by (colour, alpha rounded
+   to PART_ALPHA_STEPS levels) and each bucket is drawn as ONE path holding
+   every circle in it. Round particles typically collapse from ~300 fills to
+   under a dozen. The alpha quantisation is invisible: these are 1-3px dots
+   fading out over a fraction of a second.
+
+   Squares and glyphs are rarer (they only exist for two of the explosion
+   cosmetics) and keep the straightforward path, though squares are batched
+   by bucket too since fillRect needs no path of its own. */
+const PART_ALPHA_STEPS = 6;
+const partBuckets = new Map();
 function drawParts(list) {
+  if (!list.length) return;
+  partBuckets.clear();
+  let glyphs = null;
   for (const p of list) {
     const a = clamp(p.life / p.max, 0, 1);
-    ctx.globalAlpha = a;
-    ctx.fillStyle = "rgb(" + p.col + ")";
-    if (p.ch) {
+    if (a <= .01) continue;
+    if (p.ch) { (glyphs || (glyphs = [])).push(p); continue; }
+    const step = Math.max(1, Math.round(a * PART_ALPHA_STEPS));
+    const key = (p.sq ? "s" : "c") + step + "|" + p.col;
+    let bucket = partBuckets.get(key);
+    if (!bucket) { bucket = { col: p.col, a: step / PART_ALPHA_STEPS, sq: !!p.sq, items: [] }; partBuckets.set(key, bucket); }
+    bucket.items.push(p);
+  }
+  for (const bucket of partBuckets.values()) {
+    ctx.globalAlpha = bucket.a;
+    ctx.fillStyle = "rgb(" + bucket.col + ")";
+    if (bucket.sq) {
+      for (const p of bucket.items) {
+        const a = clamp(p.life / p.max, 0, 1), s = p.size * (.5 + a * .9);
+        ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
+        ctx.fillRect(-s, -s, s * 2, s * 2);
+        ctx.restore();
+      }
+      continue;
+    }
+    ctx.beginPath();
+    for (const p of bucket.items) {
+      const a = clamp(p.life / p.max, 0, 1);
+      const r = p.size * (.4 + a * .6);
+      ctx.moveTo(p.x + r, p.y);
+      ctx.arc(p.x, p.y, r, 0, TAU);
+    }
+    ctx.fill();
+  }
+  if (glyphs) {
+    ctx.textAlign = "center";
+    for (const p of glyphs) {
+      ctx.globalAlpha = clamp(p.life / p.max, 0, 1);
+      ctx.fillStyle = "rgb(" + p.col + ")";
       ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
       ctx.font = "700 " + (p.size * 4.4).toFixed(1) + "px " + MONO;
-      ctx.textAlign = "center";
       ctx.fillText(p.ch, 0, 0);
       ctx.restore();
-    } else if (p.sq) {
-      const s = p.size * (.5 + a * .9);
-      ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot);
-      ctx.fillRect(-s, -s, s * 2, s * 2);
-      ctx.restore();
-    } else {
-      ctx.beginPath(); ctx.arc(p.x, p.y, p.size * (.4 + a * .6), 0, TAU); ctx.fill();
     }
   }
   ctx.globalAlpha = 1; ctx.textAlign = "left";

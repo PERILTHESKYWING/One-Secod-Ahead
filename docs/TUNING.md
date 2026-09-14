@@ -484,3 +484,107 @@ by you**, which may press into the edge and hang over it by
 `SHOVE_OVERHANG` (`.55` of its radius). That edge is also what Piledriver
 reads as a wall, so the arena boundary is a usable surface even in Chamber
 09, which has no geometry of its own.
+
+
+---
+
+## 15 · Performance, second pass
+
+The first pass fixed sim-side costs (zones, audio churn, damage combos). It
+barely moved the framerate, because **the sim was never the bottleneck**. A
+V8 sampling profile of the real loop under heavy load — 34 enemies, 70
+projectiles, burning trail, multishot — put every JS function under 1% of
+self time. The frame is spent in the canvas rasterizer.
+
+### What was actually slow
+
+Measured, in order of size:
+
+**1 · Device pixel ratio.** The same scene runs at **half the framerate at
+DPR 2** that it does at DPR 1 — 21 vs 49 fps median. Four times the pixels.
+This is the single largest factor in the whole renderer and it only affects
+players on a high-density display, which is why it never showed up in
+earlier testing.
+
+**2 · The bloom, and specifically its downscale.** The bloom did a single
+`drawImage` of the whole canvas into a quarter-size buffer *with a blur
+filter set*. That makes the browser blur at the source resolution and then
+resample: **12 ms of an 18 ms frame at DPR 2, in one call**. Splitting the
+two jobs — a plain downscale, then a blur of the small buffer — blurs 64k
+pixels instead of 4M for the same picture.
+
+**3 · Per-path overhead.** 1,167 `beginPath` and 813 `fill` calls per frame.
+Particles were one path each (~120/frame), enemy projectiles six paint calls
+each (~210/frame for 70 shots), enemy ground shadows one each plus a
+`ctx.filter` assignment (which flushes canvas state even when set to
+`"none"`).
+
+**4 · Allocation churn.** `shade()`/`ecol()`/`rgbOf()` split a string into
+two throwaway arrays and built a new string on every call, several times per
+enemy per frame. `glowPool()` built a fresh radial gradient per enemy per
+frame; the player's light pool and every pulse built one per frame too.
+
+### What changed
+
+| Fix | Effect |
+|---|---|
+| `renderScale`, wired into the quality ladder | The backing store drops to `RENDER_SCALE` of device resolution at the lowest rung. **Clamped so it never goes below 1 device pixel per CSS pixel** — it spends *excess* resolution on a 2x display and correctly does nothing on a 1x one. |
+| Bloom: downscale and blur split | Blur runs on 320×200 instead of 2560×1600 |
+| Bloom rebuilt every other frame | A soft wide glow does not need 60 Hz; one frame of latency is imperceptible and it halves the cost |
+| Particles batched by (colour, alpha) | **120 → 3.4** paints/frame |
+| Projectiles batched by colour | one path for all bodies, one for all rims, one for all highlights |
+| Pulse trails | two flat strokes instead of a gradient built per bullet per frame |
+| Ground shadows batched, `ctx.filter` removed | one path for the whole cast; 34 state flushes/frame gone |
+| `shade`/`ecol`/`rgbOf` memoised | caches saturate in a second and are cleared on a theme change |
+| `glowPool` gradient cached | built at the origin and translated, keyed by colour/alpha/rounded radius |
+| Backdrop at device resolution, blit snapped to whole device pixels | a fractional destination forces a bilinear resample of the whole image |
+| Redundant full-screen clear removed | the opaque backdrop already covers every pixel, shake included |
+
+Paints per frame under the heavy-load scene: **1141 → 874**, and the
+non-enemy passes specifically **400 → 63**.
+
+### Results
+
+Sustained median fps, heavy load, quality ladder running as it does in play:
+
+| | before | after |
+|---|---|---|
+| **DPR 2 (high-density display)** | 21 | **39** |
+| DPR 1 | 49 | 50 |
+| DPR 1, pinned at full quality | 39 | 43 |
+
+The high-DPI case is where the win is, and it is the case most likely to be
+a real player's machine.
+
+### The quality ladder
+
+`QUALITY_RUNGS = [1, .82, .62, .4]` with `RENDER_SCALE = [1, 1, 1, .68]`,
+dropping below 46 fps (3 samples) and recovering above 58 (10 samples).
+Each rung sheds the most expensive thing left before touching anything
+cheaper: chromatic split, then bloom and particle counts, then resolution.
+Resolution is deliberately last — it is the only rung you can see in the
+sharpness of the picture rather than just in the effects.
+
+### What was tried and rejected
+
+**An enemy sprite cache.** `drawEnemy` is 82% of all painting — roughly
+twenty path fills per body per frame — so caching each body's art into an
+offscreen canvas and blitting it looks like the obvious next win, and a
+first measurement suggested +21%.
+
+It does not survive a clean A/B. Measured at the **same** quality rung with
+only the cache toggled: **+2 fps at DPR 1, and 22% slower at DPR 2**, where
+every miss re-renders into a double-resolution buffer at a hit rate that
+falls to about half. The apparent +21% came from comparing two different
+quality rungs, which also changed the particle budget.
+
+It was also not visually free: about a third of the ART functions draw with
+per-frame randomness, and caching a frame of that freezes the shimmer.
+
+The attempt is documented in a comment above `drawEnemy` in
+`js/05-branch-art.js` so it is not rebuilt. Two things it produced are worth
+keeping in mind if anyone tries again: art bounds must be **measured, not
+guessed** (a Dart draws a lock line 320px out from a 13px body), and the
+measurement must force `globalAlpha` opaque and scan a wide area at reduced
+resolution, or fading and far-reaching art measures as absent and gets
+cropped in play.

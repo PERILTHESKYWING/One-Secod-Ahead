@@ -701,18 +701,32 @@ let last = performance.now(), raf = 0, fpsAcc = 0, fpsN = 0, slowFor = 0;
    when the frames come back. The hysteresis gap between DROP and RECOVER is
    what stops it oscillating on a machine sitting right on the boundary. */
 const QUALITY_RUNGS = [1, .82, .62, .4];
+/* What each rung costs the picture, cheapest thing first:
+     1     everything
+     .82   no chromatic split           (measured 6.5ms a frame on its own)
+     .62   no bloom, fewer particles
+     .4    ...and the canvas drops to RENDER_SCALE of the device resolution,
+           which is the single biggest lever there is on a 2x display —
+           a quarter of the pixels to rasterise for a slightly softer image.
+   The render scale is deliberately last: it is the only rung you can see in
+   the sharpness of the picture rather than just in the effects. */
+const RENDER_SCALE = [1, 1, 1, .68];
 const QUALITY_DROP_FPS = 46;    /* below this, shed a rung */
 const QUALITY_RECOVER_FPS = 58; /* above this, take one back */
 let qSlow = 0, qFast = 0;
+function applyQualityRung(rung) {
+  G.quality = QUALITY_RUNGS[rung];
+  if (typeof setRenderScale === "function") setRenderScale(RENDER_SCALE[rung]);
+}
 function adaptQuality() {
   const i = QUALITY_RUNGS.indexOf(G.quality);
   const rung = i < 0 ? 0 : i;
   if (G.fps < QUALITY_DROP_FPS) {
     qFast = 0;
-    if (++qSlow >= 3 && rung < QUALITY_RUNGS.length - 1) { G.quality = QUALITY_RUNGS[rung + 1]; qSlow = 0; }
+    if (++qSlow >= 3 && rung < QUALITY_RUNGS.length - 1) { applyQualityRung(rung + 1); qSlow = 0; }
   } else if (G.fps > QUALITY_RECOVER_FPS) {
     qSlow = 0;
-    if (++qFast >= 10 && rung > 0) { G.quality = QUALITY_RUNGS[rung - 1]; qFast = 0; }
+    if (++qFast >= 10 && rung > 0) { applyQualityRung(rung - 1); qFast = 0; }
   } else { qSlow = 0; qFast = 0; }
 }
 function frame(now) {
