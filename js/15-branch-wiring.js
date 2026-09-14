@@ -82,12 +82,13 @@ function markBranchCleared() {
   }
   refreshBranchHome();
 }
+/* Called by finishLevel() when level 15 falls, rather than by nextLevel()
+   walking off the end of the branch — there is no walking off the end any
+   more, a boss clear returns to the map like every other level. */
 function branchVictory() {
   G.score += 2000;
   text(W / 2, H * .4, "branch resolved", TH.shard, 26);
   flash(.3, TH.shard);
-  setTimeout(() => { if (G.mode === "play") endRun(); }, 1600);
-  G.breather = 4;
 }
 
 /* --- the boss bar: phase pips, a chasing ghost, and a name --- */

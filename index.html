@@ -61,6 +61,7 @@
       <div style="display:flex;flex-direction:column;align-items:flex-end;gap:16px">
         <button class="themeSwap" id="themeSwap"><i></i><span>Daylight</span></button>
         <div class="records">
+          <div class="rec"><b id="recTrophies">—</b><span>trophies</span></div>
           <div class="rec"><b id="recLevel">—</b><span>furthest level</span></div>
           <div class="rec"><b id="recWave">—</b><span>best wave</span></div>
           <div class="rec"><b id="recScore">—</b><span>best score</span></div>
@@ -95,11 +96,12 @@
     <div class="scrim"></div>
     <div class="panel wide">
       <div class="panel-head">
-        <div><h2>Branch archive</h2><p>Five recorded timelines. Chamber 09 is the baseline; the rest were pruned and filed. Each one runs its own physics, its own inhabitants and its own way of ending.</p></div>
+        <div><h2>Space-time</h2><p>Five recorded timelines, fifteen levels each. Clear a level to open the next one; clear a branch to bring the next branch online. Every level keeps your best result forever.</p></div>
+        <div class="road-total"><b id="roadTrophies">0</b><span>trophies banked</span></div>
       </div>
-      <div class="tl-body" id="tlList"></div>
+      <div class="road" id="tlList"></div>
       <div class="panel-foot">
-        <div class="keys"><span><i class="k">Esc</i> back</span></div>
+        <div class="keys"><span><i class="k">Esc</i> back</span><span id="roadHint"></span></div>
         <button class="btn" data-go="home">Back to menu</button>
       </div>
     </div>
@@ -244,9 +246,35 @@
       <h3 id="lcName">The Shallows</h3>
       <p class="hook" id="lcHook"></p>
       <div class="newcomers" id="lcNew"></div>
+      <div class="lctip" id="lcTip"></div>
       <div class="go" id="lcGo">starting…</div>
     </div>
   </div>
+
+  <section class="screen" id="levelResult">
+    <div class="scrim"></div>
+    <div class="panel">
+      <div class="result-label" id="lrEyebrow">Chamber 09 · level 1</div>
+      <div class="lr-title" id="lrTitle">Level cleared</div>
+      <div class="lr-trophy">
+        <b id="lrTrophies">0</b><span>trophies this attempt</span>
+        <div class="lr-bonus" id="lrBonus"></div>
+      </div>
+      <div class="lr-best" id="lrBest"></div>
+      <div class="stat-grid">
+        <div class="stat"><b id="lrKills">0</b><span>kills</span></div>
+        <div class="stat"><b id="lrTime">0:00</b><span>clear time</span></div>
+        <div class="stat"><b id="lrHits">0</b><span>hits taken</span></div>
+        <div class="stat"><b id="lrShards" class="gold">0</b><span>shards banked</span></div>
+      </div>
+      <div class="lr-rewards" id="lrRewards"></div>
+      <div class="actions">
+        <button class="btn primary" id="lrNext">Next level</button>
+        <button class="btn" id="lrRetry">Replay</button>
+        <button class="btn" data-go="timelines">Space-time map</button>
+      </div>
+    </div>
+  </section>
 
   <div class="overlay" id="draft">
     <div class="scrim"></div>
@@ -260,6 +288,8 @@
 </div>
 <script src="js/01-engine-core.js"></script>
 <script src="js/02-content-branches.js"></script>
+<script src="js/02b-arena-curve.js"></script>
+<script src="js/02c-trophy-road.js"></script>
 <script src="js/03-render-toolkit.js"></script>
 <script src="js/04-enemy-art.js"></script>
 <script src="js/05-branch-art.js"></script>

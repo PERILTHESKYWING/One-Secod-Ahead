@@ -364,31 +364,155 @@ body[data-theme="light"] .cosm canvas{background:rgba(30,50,100,.07)}
 
 .panel.wide { max-width:min(1180px,94vw); }
 
-/* ---- timeline select ---- */
-.tl-body { display:grid; grid-template-columns:repeat(auto-fit,minmax(258px,1fr)); gap:14px;
-  padding:20px 24px; overflow:auto; align-content:start; }
-.tlcard { position:relative; text-align:left; cursor:pointer; padding:16px 16px 14px; border-radius:14px;
-  background:linear-gradient(160deg,rgba(255,255,255,.05),rgba(255,255,255,.015));
-  border:1px solid rgba(255,255,255,.09); color:inherit; font:inherit;
-  transition:transform .18s cubic-bezier(.2,.9,.2,1),border-color .18s,background .18s;
-  display:flex; flex-direction:column; gap:9px; overflow:hidden; }
-.tlcard::before { content:""; position:absolute; inset:0; background:radial-gradient(120% 80% at 50% 0%,var(--tc),transparent 70%);
-  opacity:.09; pointer-events:none; }
-.tlcard:hover, .tlcard.sel { transform:translateY(-3px); border-color:var(--tc); background:linear-gradient(160deg,rgba(255,255,255,.09),rgba(255,255,255,.02)); }
-.tlcard.locked { opacity:.5; cursor:not-allowed; }
-.tlcard.locked:hover { transform:none; border-color:rgba(255,255,255,.12); }
-.tlhead { display:flex; justify-content:space-between; align-items:center; }
-.tlcode { font:700 9.5px/1 var(--mono); letter-spacing:.18em; color:var(--tc); opacity:.9; }
-.tlflag { font:700 9px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; padding:4px 7px;
-  border-radius:5px; background:rgba(120,255,190,.14); color:#7bf0b0; }
-.tlflag.lock { background:rgba(255,255,255,.07); color:rgba(255,255,255,.5); }
-.tlcard h3 { margin:0; font:800 20px/1.05 var(--mono); letter-spacing:.03em; }
-.tlcard p { margin:0; font-size:12px; line-height:1.5; opacity:.72; }
-.tlmech { border-left:2px solid var(--tc); padding-left:10px; display:flex; flex-direction:column; gap:3px; }
-.tlmech b { font:700 10px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--tc); }
-.tlmech span { font-size:11.5px; line-height:1.5; opacity:.66; }
-.tlroster { display:flex; gap:6px; align-items:center; margin-top:auto; padding-top:6px; flex-wrap:wrap; }
-.tlroster canvas.hid { filter:brightness(0) invert(.28); opacity:.4; }
+/* ---- the space-time map (Trophy Road) ----
+   One scrolling column of arena REGIONS; each region is a header plus a
+   horizontally scrolling strip of its fifteen level nodes. Every colour in
+   here comes from --tc, which renderTimelines() sets per region from that
+   arena's own accent — so the regions are visually distinct without any of
+   them needing their own rules. */
+.road { display:flex; flex-direction:column; gap:16px; padding:18px 24px 24px;
+  overflow:auto; align-content:start; }
+.road-total { text-align:right; }
+.road-total b { display:block; font:750 26px/1 var(--sans); letter-spacing:-.02em; color:var(--chrono); }
+.road-total span { font:600 10px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase; color:var(--faint); }
+
+.region { position:relative; border-radius:16px; overflow:hidden;
+  /* the road is a flex column inside a fixed-height panel, so a region has
+     to refuse to shrink or the level strip inside it collapses to nothing */
+  flex:0 0 auto;
+  border:1px solid rgba(255,255,255,.09);
+  background:linear-gradient(150deg,rgba(255,255,255,.045),rgba(255,255,255,.012)); }
+.region::before { content:""; position:absolute; inset:0; pointer-events:none;
+  background:radial-gradient(120% 130% at 0% 0%,var(--tc),transparent 62%); opacity:.10; }
+/* the arena's colour as a spine down its left edge */
+.region::after { content:""; position:absolute; left:0; top:0; bottom:0; width:3px;
+  background:var(--tc); opacity:.7; }
+
+.rhead { position:relative; padding:14px 18px 12px 20px; }
+.rmotif { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; opacity:.8; }
+.rinfo { position:relative; display:flex; flex-direction:column; gap:4px; }
+.rinfo h3 { margin:0; font:800 20px/1.05 var(--mono); letter-spacing:.03em; }
+.rinfo p { margin:0; font-size:12px; line-height:1.5; opacity:.7; max-width:76ch; }
+.rstat { display:flex; gap:18px; flex-wrap:wrap; margin-top:6px;
+  font:600 10.5px/1 var(--mono); letter-spacing:.1em; text-transform:uppercase; color:var(--faint); }
+.rstat b { color:var(--bone); font-weight:750; }
+.rstat .ladder { color:var(--tc); opacity:.85; }
+
+/* ---- the strip of fifteen ---- */
+.strip { display:flex; gap:8px; align-items:stretch; padding:4px 18px 16px 20px;
+  overflow-x:auto; overflow-y:hidden; scrollbar-width:thin; min-height:112px;
+  /* the strip is wider than the region at every window size, so it fades at
+     the right edge rather than ending in a hard cut that reads as the end */
+  -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 46px),transparent 100%);
+  mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 46px),transparent 100%); }
+.strip::-webkit-scrollbar { height:7px; }
+.strip::-webkit-scrollbar-thumb { background:rgba(255,255,255,.16); border-radius:4px; }
+.strip::-webkit-scrollbar-track { background:transparent; }
+/* the seam between tiers, so the climb has a visible shape */
+.seam { display:flex; flex-direction:column; align-items:center; justify-content:flex-start;
+  gap:5px; padding:0 4px; flex:0 0 auto; align-self:stretch; }
+.seam i { flex:1; width:1px; background:linear-gradient(180deg,transparent,var(--tc),transparent); opacity:.4; }
+.seam span { writing-mode:vertical-rl; font:700 8.5px/1 var(--mono); letter-spacing:.2em;
+  text-transform:uppercase; color:var(--tc); opacity:.65; }
+
+.node { position:relative; flex:0 0 128px; min-height:92px; text-align:left; cursor:pointer;
+  padding:9px 10px 10px; border-radius:11px; color:inherit; font:inherit; overflow:hidden;
+  background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.09);
+  display:flex; flex-direction:column; gap:3px;
+  transition:transform .16s cubic-bezier(.2,.9,.2,1),border-color .16s,background .16s; }
+/* the fill bar: how close this level's record sits to its ceiling */
+.node::before { content:""; position:absolute; left:0; right:0; bottom:0; height:3px;
+  width:var(--frac,0%); background:var(--tc); opacity:var(--tw,.75); transition:width .3s; }
+.node:hover { transform:translateY(-3px); border-color:var(--tc); background:rgba(255,255,255,.075); }
+.node .n { font:700 9.5px/1 var(--mono); letter-spacing:.14em; color:var(--tc); opacity:var(--tw,.9); }
+.node .nm { font:700 11.5px/1.25 var(--sans); letter-spacing:-.01em; }
+.node .tro { margin-top:auto; padding-right:32px; display:flex; align-items:center; gap:4px;
+  font:600 9px/1 var(--mono); letter-spacing:.02em; color:var(--chrono); white-space:nowrap; }
+.node .tro i { width:6px; height:6px; background:var(--chrono);
+  clip-path:polygon(50% 0,100% 38%,82% 100%,18% 100%,0 38%); }
+.node .tro.part { color:var(--faint); }
+.node.next { border-color:var(--tc); box-shadow:0 0 0 1px var(--tc) inset; }
+.node.done { background:rgba(255,255,255,.06); }
+.node.boss { flex-basis:132px; }
+.node.boss .n { color:var(--chrono); font-size:12px; }
+.node.boss::after { content:""; position:absolute; inset:0; pointer-events:none;
+  background:radial-gradient(100% 70% at 50% 100%,var(--tc),transparent 70%); opacity:.14; }
+.node.locked { opacity:.42; cursor:not-allowed; }
+.node.locked:hover { transform:none; border-color:rgba(255,255,255,.09); background:rgba(255,255,255,.035); }
+.node .mutflag { position:absolute; top:8px; right:8px; font:700 8px/1 var(--mono);
+  color:var(--chrono); opacity:.8; letter-spacing:.1em; }
+/* the mutation replay toggle */
+.node .mut { position:absolute; right:6px; bottom:7px; font:700 7.5px/1 var(--mono); font-style:normal;
+  letter-spacing:.06em; padding:3px 4px; border-radius:4px; cursor:pointer;
+  background:rgba(255,255,255,.07); color:var(--faint); border:1px solid transparent; }
+.node .mut:hover { color:var(--bone); }
+.node .mut.on { background:rgba(255,214,138,.18); color:var(--chrono); border-color:var(--chrono); }
+
+/* ---- a sealed arena: fogged, not blank ----
+   A sliver of the arena's real colour bleeds across the boundary and its
+   own roster shows through the haze as silhouettes. Visibly there, not
+   legible. */
+.region.sealed { border-color:rgba(255,255,255,.06); }
+.region.sealed::before { opacity:.05; }
+.region.sealed::after { opacity:.9;
+  background:linear-gradient(180deg,var(--tc),transparent 78%); }
+.region.sealed .rinfo h3 { opacity:.55; }
+.region.sealed .rinfo p { opacity:.45; }
+.fog { position:relative; height:78px; flex:0 0 auto; overflow:hidden; }
+/* The silhouettes have to be worth being curious about, so they are dim and
+   blurred rather than hidden: enough shape to see that something specific
+   lives in there, not enough to identify it. */
+.ghosts { position:absolute; inset:0; display:flex; align-items:center; gap:24px;
+  padding-left:26px; filter:blur(2.2px) saturate(.35) brightness(.9) contrast(1.15); opacity:.5; }
+.ghosts canvas { transform:translateY(calc(var(--k) * 3px - 6px)); }
+/* the sliver of the arena's REAL colour, bleeding across the boundary from
+   behind the fog — the theme arrives before the content does */
+.fog::before { content:""; position:absolute; inset:0; pointer-events:none;
+  background:linear-gradient(90deg,var(--tc),transparent 34%); opacity:.16; }
+.haze { position:absolute; inset:0; display:flex; align-items:center; justify-content:flex-end;
+  padding-right:20px;
+  background:linear-gradient(90deg,transparent,transparent 22%,var(--void) 82%),
+             linear-gradient(180deg,transparent 46%,var(--void)); }
+.haze span { font:700 9px/1 var(--mono); letter-spacing:.24em; text-transform:uppercase;
+  color:var(--tc); opacity:.5; }
+
+/* the Learn tier's teaching line on the level card */
+.lctip { display:none; margin:2px 0 4px; padding:9px 12px; border-radius:9px;
+  border-left:2px solid var(--signal); background:rgba(111,242,255,.07);
+  font:600 12px/1.45 var(--sans); color:var(--bone); opacity:.9; }
+.lctip.on { display:block; }
+
+/* ---- the level results screen ---- */
+#levelResult .panel { justify-content:center; align-items:flex-start; gap:0; max-width:720px; }
+.lr-title { font:800 clamp(24px,3vw,36px)/1.05 var(--sans); letter-spacing:-.03em; margin:2px 0 18px; }
+.lr-title.good { color:var(--signal); }
+.lr-title.bad { color:var(--threat); }
+.lr-trophy { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; }
+.lr-trophy b { font:750 44px/1 var(--sans); letter-spacing:-.03em; color:var(--chrono); }
+.lr-trophy > span { font:600 10.5px/1 var(--mono); letter-spacing:.14em;
+  text-transform:uppercase; color:var(--faint); }
+.lr-bonus { display:flex; gap:6px; flex-wrap:wrap; width:100%; margin-top:8px; }
+.lr-bonus .bonus { font:700 9.5px/1 var(--mono); letter-spacing:.1em; text-transform:uppercase;
+  padding:5px 7px; border-radius:5px; background:rgba(255,214,138,.16); color:var(--chrono); }
+.lr-bonus .bonus.off { background:rgba(255,255,255,.05); color:var(--faint);
+  text-transform:none; letter-spacing:.02em; font-family:var(--sans); font-size:11px; }
+.lr-best { margin-top:12px; font-size:12.5px; color:var(--mute); }
+.lr-best b { color:var(--bone); }
+.lr-best.up { color:var(--signal); }
+.lr-best.up b { color:var(--signal); }
+.lr-rewards { display:flex; flex-direction:column; gap:7px; margin-bottom:26px; }
+.lr-reward { display:flex; align-items:center; gap:10px; flex-wrap:wrap; padding:9px 12px;
+  border-radius:9px; background:rgba(255,214,138,.09); border:1px solid rgba(255,214,138,.22); }
+.lr-reward i { font:700 9px/1 var(--mono); letter-spacing:.14em; text-transform:uppercase;
+  color:var(--chrono); font-style:normal; }
+.lr-reward b { font:700 12.5px/1 var(--sans); }
+
+@media (max-width:700px) {
+  .road { padding:14px 14px 18px; }
+  .strip { padding-left:14px; padding-right:14px; }
+  .node { flex-basis:104px; }
+  .rhead { padding-left:14px; }
+}
 
 /* ---- archive ---- */
 .arc-wrap { display:grid; grid-template-columns:186px 1fr; min-height:0; flex:1; overflow:hidden; }
