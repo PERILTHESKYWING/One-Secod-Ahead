@@ -112,12 +112,13 @@ Shove magnitudes, in px of travel for a weight-1.0 body (`08-run-and-player.js`)
 
 `js/08-run-and-player.js`
 
-**Direction now comes from movement input, not the aim.** Aim and fire are
-automatic, so the aim points at whatever is nearest — which is the thing you
-are usually dashing *away* from. The gun keeps pointing where it was; the
-stick decides where you go. Standing still, it falls back to the heading you
-had if it is fresher than `DASH_DIR_MEMORY`, and to the aim only if you have
-genuinely been stationary (so the deliberate dash-through-a-body play stays).
+**Direction comes from movement input. The aim never gets a say.** Aim and
+fire are automatic, so the aim points at whatever is nearest — which is the
+thing you are usually dashing *away* from. The gun keeps pointing where it
+was; the stick decides where you go. Standing still, it uses the last
+direction you steered (the hull starts facing up). There is deliberately **no
+aim fallback**: falling back to the aim when you happen to be between key
+presses is the exact behaviour this replaced.
 
 **The escape window** is what separates it from a fast walk. At base speed you
 cannot outrun a 340px/s projectile; inside this window you can.
@@ -130,7 +131,6 @@ cannot outrun a 340px/s projectile; inside this window you can.
 | `DASH_SURGE_TIME` | `.42` s | speed-burst window after landing |
 | `DASH_SURGE_MUL` | `1.5` | move speed inside it (510 px/s vs 340 base) |
 | `DASH_EXIT_SPEED` | `1.18` | hand-off speed as a multiple of burst speed, so the launch doesn't dump you on the spot. Peak measured **1.69× base**. |
-| `DASH_DIR_MEMORY` | `.35` s | how stale a heading may be and still steer a dash |
 | `DASH_INPUT_BUFFER` | `.12` s | unchanged |
 | dash cooldown | `.85 × dashCdMul` | unchanged |
 
@@ -317,3 +317,170 @@ no two the same shape reskinned, and boss rooms keep the middle clear).
 Each layout returns `{ boxes, gates }`. `gates` are the chokepoints, and they
 are load-bearing data, not annotation: the Glassfall floor reads them to refuse
 to shatter a doorway away.
+
+
+---
+
+## 10 · Performance
+
+The reported "incredibly laggy with the dash trail" turned out to be three
+separate things stacked. Measured in headless Chromium with software
+rendering (so absolute numbers are inflated; the *ratios* are the point), 40
+enemies, dash-burn + volatile + chain + multishot:
+
+| | before | after |
+|---|---|---|
+| sim per frame | 0.67 ms | **0.39 ms** |
+| avg live zones | 68 | **7** |
+| render, chroma split active | 19.5 ms | **12.7 ms** |
+
+**1 · The chromatic split was the big one.** Two extra full-screen `lighter`
+composites of the bloom buffer — **6.5 ms a frame on its own**, more than the
+bloom it decorates. It triggered on `max(trauma, chroma) > .25`; trauma is
+raised by *every connecting pulse* and a dash set chroma to `.45` outright,
+so in any sustained fight it was on permanently and dashing pinned it there.
+
+| Constant | Value | Effect |
+|---|---|---|
+| `SPLIT_MIN` | `.5` | how violent a moment must be to earn the split. Ordinary combat trauma doesn't reach it; a Time-Swap (`.8`) does. |
+| dash chroma | `.34` | below `SPLIT_MIN` on purpose |
+| split draws | 1 | was 2 |
+| split quality gate | `> .85` | first thing shed when frames drop |
+
+**2 · The dash burn trail.** It rolled a 60% chance **every frame** of the
+dash and dropped a fresh 2.2s zone each time — six per dash, twenty-plus
+alive at once. Every zone is tested against every enemy every frame *and*
+drawn as its own filled path, and overlapping zones each re-ran the whole
+damage pipeline on the same body. It is laid by **distance** now:
+
+| Constant | Value | Effect |
+|---|---|---|
+| `BURN_STEP` | `34` px | travel between patches — framerate-independent |
+| `BURN_R` | `40` px | wider, so fewer cover the same lane |
+| `BURN_LIFE` | `1.5` s | |
+| `BURN_DPS` | `46` | per stack of the core |
+| `BURN_MAX` | `7` | patches one trail may have alive |
+| `ZONE_CAP` | `22` | global cap, oldest dropped |
+
+Overlapping zone damage is also summed into **one** `damageEnemy` call per
+body per frame — which fixed a balance bug as well as a perf one, since a
+doubled-back trail was deleting things several times faster than the numbers
+said.
+
+**3 · Audio and explosion churn.** `explode()` now takes a `quiet` flag used
+by everything that fires in bulk (Volatile rounds on every pellet, chain
+arcs, echo collapse): no flash, no shake, a fifth of the debris, rate-gated
+audio. `Audio_.rateOk(name, gap)` gates the hot effects (`hit` 35 ms, `boom`
+70 ms) — dozens of identical Web Audio node graphs per frame sounded like one
+boom anyway and cost like dozens.
+
+**4 · The quality ladder.** Was a one-way cliff: below 42 fps for four
+samples it dropped to `.5` (bloom off outright) and never recovered. Now a
+ladder that sheds the most expensive thing left first, with hysteresis:
+
+`QUALITY_RUNGS = [1, .82, .62, .4]` · drop below `46` fps · recover above
+`58` fps. Split goes at `.85`, bloom at `.5`, particle counts scale
+throughout.
+
+---
+
+## 11 · The pilot starts finished
+
+`BASELINE` in `js/01-engine-core.js` grants every former shop upgrade at max
+— chassis, weapon, echo **and** modules. `lvlOf()` reads it, so every
+downstream call site is untouched. Starting integrity is 175.
+
+The fight was raised to meet it:
+
+| Constant | Value | Effect |
+|---|---|---|
+| `ENEMY_HP_BUFF` | `1.4` | every body, on top of tier scaling |
+| `ENEMY_DMG_BUFF` | `1.18` | |
+| `ENEMY_SPEED_BUFF` | `1.08` | least, because speed makes a room unreadable rather than hard |
+| wave budget | `12 + tier×3.8 + n×3.4 + loop×8` | was `6 + tier×3.4 + n×2.4 + loop×7` — **wave 1 is roughly double** |
+| elite odds | `(tier−1)×.04 + .03`, cap `.34` | elites from wave 1 |
+| `HOSTILE_SPEED_MUL` | `1.3` | every enemy projectile. Base move is 340 px/s and the dash burst is 510, so you can no longer simply walk out of a volley |
+
+---
+
+## 12 · Abilities
+
+Twelve, in `js/16-abilities.js`. You carry **three**. Slot order is the
+keybinding (`1`/`2`/`3`). Full costs, descriptions and stated synergies are
+in the catalogue itself; the tuning constants:
+
+| | | |
+|---|---|---|
+| `PILE_WALL_DMG` | `1.7` /px | Piledriver. A 74px dash-through into a wall ≈ 190 damage; weight divides the travel, so a Trench takes a third of it |
+| `PILE_MIN_TRAVEL` | `18` px | below this a shove isn't an impact |
+| `PILE_STUN` | `.9` s | |
+| `WELL_R` / `WELL_PULL` / `WELL_LIFE` | `230` px / `330` px/s / `1.8` s | Gravity Well. Pure setup — no damage of its own |
+| `CW_BANK_MAX` / `CW_DMG` / `CW_SHOVE` | `1400` / `.085` / `.16` | Counterweight |
+| `SHRAP_N` / `SHRAP_DMG` | `7` / `16` | Shrapnel |
+| `BRAND_MAX` / `BRAND_LIFE` / `BRAND_AMP` | `5` / `6` s / `.07` per stack | Phase Brand. The amp applies to **every** damage source |
+| `CONDUIT_EVERY` / `CONDUIT_DMG` / `CONDUIT_RANGE` | `.6` s / `13` per stack / `300` px | Conduit |
+| `DET_DMG` / `DET_R` | `26` per stack / `120` px | Detonate, with a `×(1 + stacks×.35)` square term — five stacks is far more than five ones |
+| `HARVEST_HP` | `1` per stack | plus one ammo charge per stack |
+| `STUTTER_R` / `STUTTER_LIFE` / `STUTTER_RATE` | `170` px / `3.5` s / `.35` | Stutter Field. Slows bodies **and** shots already in the air |
+| `ST_DELAY` / `ST_DMG` | `.32` s / `.66` | Second Trigger |
+| `REWIND_BACK` / `REWIND_IFRAME` | `1.6` s / `.5` s | Rewind Step, plus a full magazine |
+| `OC_MAX` / `OC_RATE` / `OC_SPEED` / `OC_DECAY` | `10` / `.04` / `.02` / `4` s | Overclock |
+
+Cooldowns live on the catalogue entries (`cd`): Gravity Well 9s, Detonate 7s,
+Stutter 10s, Rewind 8s.
+
+**The `env` channel.** Abilities and room mechanics that push the player
+write to `p.env`, which is a **per-frame accumulator** cleared by
+`updatePlayer` after `stepPlayer` spends it — contributors add, they never
+assign. A constant pusher that assigns (or that nothing clears) climbs
+without limit; a Special Grade Warden's drag reached 1440 px/s before this
+was fixed.
+
+---
+
+## 13 · Special grade (survival)
+
+Survival has **no boss**. Every tenth wave used to drop a Paradox, which made
+an endurance mode into a boss rush with waiting in between. What replaces it
+is a per-spawn roll for a gold-coronaed mutation, and the odds climb.
+
+Survival also draws from **every Chamber 09 level from wave one** — the old
+staged unlock meant the first ten waves could only produce four kinds of
+trouble. The wave budget is the limiter instead, with a draw bias toward the
+cheap end that fades out by about wave 20 (so wave 1 isn't a coin flip
+between five Husks and two Broodmothers).
+
+| Constant | Value | Effect |
+|---|---|---|
+| `MUT_BASE_CHANCE` | `.045` | at wave 1 → **5.1%** |
+| `MUT_PER_WAVE` | `.0065` | wave 20 → **17.5%** |
+| `MUT_MAX_CHANCE` | `.24` | ceiling, reached ~wave 60 |
+| `MUT_HP` | `3.2` | a Husk goes 48 → 152 |
+| `MUT_DMG` | `1.5` | |
+| `MUT_SPEED` | `1.16` | |
+| `MUT_R` | `1.18` | physically bigger, so it reads at a glance |
+| `MUT_WEIGHT` | `1.7` | shrugs off shoves |
+| `MUT_SHARDS` / `MUT_SCORE` | `5` / `6` | worth killing |
+
+**All 36 non-boss enemies have one**, each named and tuned for its body,
+built from shared primitives so they stay reliable: `revive`, `regen`,
+`ward`, `haste`, `rate`, `volley`, `split`, `burst`, `rot`, `blink`,
+`summon`, `aura`, `chill`, `reflect`, `drag`. The `volley` primitive hooks
+`enemyShoot`, which is the single funnel every shot in the game goes through
+— so a Special Grade's volley widens whatever its base AI fires without any
+of the 36 AI branches knowing about it.
+
+The roll happens inside `spawnEnemy`, so it applies to everything that ever
+enters the room — including bodies other enemies summon or split into.
+
+---
+
+## 14 · Enemies stay on screen
+
+Enemies used to be allowed 60px outside the canvas on every side, so a Weaver
+could shell you from somewhere you couldn't shoot back. `keepOnScreen()` now
+holds every body inside the view, with one exception: **a body being shoved
+by you**, which may press into the edge and hang over it by
+`SHOVE_OVERHANG` (`.55` of its radius). That edge is also what Piledriver
+reads as a wall, so the arena boundary is a usable surface even in Chamber
+09, which has no geometry of its own.

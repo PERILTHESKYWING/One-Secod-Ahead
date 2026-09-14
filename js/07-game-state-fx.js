@@ -187,7 +187,14 @@ function text(x, y, txt, col, size) {
   const o = { x, y, vy: -46, life: .85, max: .85, txt, col, size: size || 14, pop: 0, crit: 0 };
   G.texts.push(o); return o;
 }
-function zone(x, y, r, life, dps, col) { G.zones.push({ x, y, r, life, max: life, dps, col }); }
+/* Burning ground. Capped: every zone is tested against every enemy every
+   frame AND drawn as its own filled path, so an uncapped list is a quadratic
+   cost that the dash trail used to hit hard. Oldest goes first. */
+const ZONE_CAP = 22;
+function zone(x, y, r, life, dps, col) {
+  if (G.zones.length >= ZONE_CAP) G.zones.shift();
+  G.zones.push({ x, y, r, life, max: life, dps, col });
+}
 function beam(x1, y1, x2, y2, col, life) { G.beams.push({ x1, y1, x2, y2, life: life || .22, max: life || .22, col }); }
 function shake(a, dx, dy) { G.trauma = Math.min(1, G.trauma + a * SAVE.settings.shake); G.shakeDir.x = dx || 0; G.shakeDir.y = dy || 0; }
 function hitStop(t) { G.freeze = Math.max(G.freeze, t); }

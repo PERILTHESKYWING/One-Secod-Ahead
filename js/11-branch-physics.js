@@ -360,7 +360,10 @@ function heatwaveField(dt) {
   const fl = emberFloor(26);
   if (force !== 0) {
     const dx = p.x - fl.cx, dy = p.y - fl.cy, d = Math.hypot(dx, dy) || 1;
-    p.env.x = (dx / d) * force; p.env.y = (dy / d) * force;
+    /* adds rather than assigns: env is a shared per-frame accumulator that
+       updatePlayer clears, so the breath is one contributor among however
+       many the room has */
+    p.env.x += (dx / d) * force; p.env.y += (dy / d) * force;
     /* the outward half is the gun's problem too: riding a heatwave cooks it */
     if (force > 0) G.heat = clamp(G.heat + HEATWAVE_HEAT * dt * hw.str, 0, 1.2);
     /* everything loose goes with it, lighter bodies further — the same
@@ -376,7 +379,7 @@ function heatwaveField(dt) {
       const hx = h.x - fl.cx, hy = h.y - fl.cy, hd = Math.hypot(hx, hy) || 1;
       h.vx += (hx / hd) * force * .9 * dt; h.vy += (hy / hd) * force * .9 * dt;
     }
-  } else { p.env.x = 0; p.env.y = 0; }
+  }
 }
 function spurtField(dt) {
   const p = G.player;

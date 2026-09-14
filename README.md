@@ -25,11 +25,17 @@ and cosmetics are saved to the browser's `localStorage`.
 `WASD` move · aim/fire are automatic · `Space` dash (or swap places with your
 decoy) · `E` summon an echo/decoy · `T` toggle day/night theme · `Esc` pause.
 
+`1` `2` `3` fire the three abilities in your loadout, in slot order.
+
 The dash goes where you are **steering**, not where you are pointing — the gun
 keeps facing whatever it was shooting, so you can dash out of a squeeze while
 still firing into it. It carries invulnerability past the end of the launch and
 a short speed burst after it, which is what makes it an escape rather than a
 fast walk.
+
+The hull starts fully upgraded. The Echo Lab doesn't sell stats — it sells
+twelve abilities, and you carry three of them, so the question is which three
+work together rather than which one is strongest.
 
 ## Project layout
 
@@ -76,6 +82,9 @@ js/
   14-branch-shell.js      Timeline select screen, the Archive, the operator
                           console, input handling, run flow, menus, main loop.
   15-branch-wiring.js     Secret detection, the hidden seal, branch completion.
+  16-abilities.js         The twelve pilot abilities and the three-slot
+                          loadout, plus the special-grade mutations survival
+                          rolls onto its enemies (one for every enemy type).
 ```
 
 ### Editing tips

@@ -203,34 +203,12 @@ TIMELINES[0].levels = CH09_LEVELS;
 const BOSSES = { paradox: 1, stillhour: 1, perihelion: 1, drownedindex: 1, omega: 1 };
 
 
-/* ---------------- content: shop -------------------------------------- */
-const SHOP = [
-  { cat: "Chassis", id: "hp", name: "Reinforced hull", desc: "Raises maximum integrity by 15.", max: 5, cost: (l) => 60 + l * 70 },
-  { cat: "Chassis", id: "regen", name: "Nanoweave", desc: "Slowly repairs you the whole time you're alive.", max: 4, cost: (l) => 130 + l * 130 },
-  { cat: "Chassis", id: "shield", name: "Deflector cell", desc: "Eats one hit outright, then rebuilds after eleven seconds.", max: 2, cost: (l) => 300 + l * 400 },
-  { cat: "Chassis", id: "dashCd", name: "Vent array", desc: "Dash comes back 13% sooner.", max: 3, cost: (l) => 150 + l * 160 },
-  { cat: "Weapon", id: "pulse", name: "Pulse amplifier", desc: "Adds 10% pulse damage.", max: 5, cost: (l) => 70 + l * 80 },
-  { cat: "Weapon", id: "rate", name: "Cycle regulator", desc: "Fires 7% faster.", max: 5, cost: (l) => 70 + l * 80 },
-  { cat: "Weapon", id: "dashDmg", name: "Kinetic edge", desc: "Dashing through something hurts it 35% more.", max: 3, cost: (l) => 160 + l * 170 },
-  { cat: "Weapon", id: "crit", name: "Fracture optics", desc: "Adds a 6% chance for a pulse to hit three times as hard.", max: 3, cost: (l) => 200 + l * 200 },
-  { cat: "Echo", id: "echoCharge", name: "Twin buffer", desc: "Carry a second echo charge.", max: 2, cost: (l) => 400 + l * 500 },
-  { cat: "Echo", id: "echoLife", name: "Persistence", desc: "Echoes stay 25% longer.", max: 3, cost: (l) => 140 + l * 150 },
-  { cat: "Echo", id: "echoDmg", name: "Resonance", desc: "Echoes hit 30% harder.", max: 3, cost: (l) => 160 + l * 170 },
-  { cat: "Echo", id: "collect", name: "Collector field", desc: "Pulls shards from further out and makes each one worth more.", max: 4, cost: (l) => 120 + l * 140 },
-  { cat: "Modules", id: "swapWave", name: "Displacement wave", tag: "Time-Swap", max: 2,
-    desc: "A Time-Swap tears open both ends of the trade: damage and a hard shove where you were and where you land.", cost: (l) => 240 + l * 320 },
-  { cat: "Modules", id: "swapFree", name: "Phase capacitor", tag: "Time-Swap", max: 1,
-    desc: "Swapping stops spending dash charges and runs on its own two-second cycle instead.", cost: () => 720 },
-  { cat: "Modules", id: "decoyGuard", name: "Decoy plating", tag: "Decoys", max: 2,
-    desc: "Decoys hold together 60% longer under fire and pull attention harder than you do.", cost: (l) => 220 + l * 240 },
-  { cat: "Modules", id: "traceRead", name: "Trace reader", tag: "Hazard lines", max: 1,
-    desc: "Reads purge intent early: telegraphs appear sooner, draw brighter, and hit you for a quarter less.", cost: () => 380 },
-  { cat: "Modules", id: "brake", name: "Chrono brake", tag: "Hazard lines", max: 1,
-    desc: "When a hazard line locks onto you, the chamber crawls for a third of a second. Use it.", cost: () => 640 },
-  { cat: "Modules", id: "salvage", name: "Entropy salvage", tag: "Hazard lines", max: 2,
-    desc: "Anything killed standing in a live hazard line coughs up an extra shard.", cost: (l) => 200 + l * 220 },
-];
-const SHOP_CATS = ["Chassis", "Weapon", "Echo", "Modules"];
+/* ---------------- the shop -------------------------------------------
+   There is no longer a stat shop. Every permanent upgrade the old one sold
+   is granted at maximum from the first run (see BASELINE in
+   01-engine-core.js), and the Echo Lab sells ABILITIES instead — twelve of
+   them, three carried at a time. The catalogue and its runtime live in
+   js/16-abilities.js, which is the one place to look for them. */
 
 /* ---------------- content: procedural cosmetics ----------------------- */
 const COSM_GROUPS = [

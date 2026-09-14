@@ -47,7 +47,27 @@ try {
   SAVE.cosmetics.owned = Object.assign({}, DEFAULT_SAVE.cosmetics.owned, SAVE.cosmetics.owned || {});
 } catch (e) { storageOK = false; }
 function persist() { if (!storageOK) return; try { localStorage.setItem("osa.save.v3", JSON.stringify(SAVE)); } catch (e) { storageOK = false; } }
-const lvlOf = (id) => SAVE.upgrades[id] || 0;
+/* ---- the pilot arrives finished ---------------------------------------
+   The shop used to sell permanent stat levels, so every run began with a
+   half-built hull and the first hour of the game was spent buying back the
+   numbers. It doesn't any more: every one of those upgrades is granted at
+   maximum from the first run, and the shop sells ABILITIES instead — a
+   loadout choice rather than a power ladder (see 16-abilities.js).
+
+   This is the single source of truth for what "maxed" means. It is keyed
+   the same way the old shop entries were, so every `lvlOf(...)` call site
+   downstream — baseMods(), makePlayer(), the dash and echo maths — keeps
+   working untouched and simply reads a full tank.
+
+   Everything on the other side of the fight was raised to meet it: see
+   ENEMY_HP_BUFF and the wave budget in 08-run-and-player.js. */
+const BASELINE = {
+  /* chassis */ hp: 5, regen: 4, shield: 2, dashCd: 3,
+  /* weapon  */ pulse: 5, rate: 5, dashDmg: 3, crit: 3,
+  /* echo    */ echoCharge: 2, echoLife: 3, echoDmg: 3, collect: 4,
+  /* modules */ swapWave: 2, swapFree: 1, decoyGuard: 2, traceRead: 1, brake: 1, salvage: 2,
+};
+const lvlOf = (id) => (BASELINE[id] != null ? BASELINE[id] : (SAVE.upgrades[id] || 0));
 /* equipped cosmetic ids, read every frame by the renderers */
 const COS = { trail: "trail_std", skin: "skin_std", boom: "boom_std" };
 function syncCosmetics() {
@@ -227,7 +247,19 @@ const Audio_ = {
   },
   /* cues */
   shoot(p) { this.tone({ type: "square", freq: 640 * p, to: 250 * p, dur: .06, gain: .055, filter: "lowpass", cutoff: 2400 }); this.noiseHit({ freq: 2400, to: 800, dur: .045, gain: .035 }); },
-  hit() { this.noiseHit({ freq: 1600, to: 520, dur: .055, gain: .06, q: 1.5 }); },
+  /* A rate gate on the hot effects. Every call builds Web Audio nodes, and
+     a compound damage build (explosive rounds through a pack, a chain arc,
+     a burning trail) can ask for dozens of identical booms in one frame —
+     which sounds like one boom anyway and costs like dozens. Returns false
+     if this effect fired too recently to bother firing again. */
+  _gate: {},
+  rateOk(name, gap) {
+    const t = (typeof performance !== "undefined" ? performance.now() : Date.now()) / 1000;
+    if (this._gate[name] != null && t - this._gate[name] < gap) return false;
+    this._gate[name] = t;
+    return true;
+  },
+  hit() { if (!this.rateOk("hit", .035)) return; this.noiseHit({ freq: 1600, to: 520, dur: .055, gain: .06, q: 1.5 }); },
   deflect() { this.tone({ type: "triangle", freq: 1500, to: 2500, dur: .09, gain: .08 }); },
   swap() {
     this.tone({ type: "triangle", freq: 880, to: 1720, dur: .11, gain: .085 });
@@ -237,7 +269,7 @@ const Audio_ = {
   lock(p) { this.tone({ type: "square", freq: 220 * (p || 1), to: 340 * (p || 1), dur: .09, gain: .035, filter: "lowpass", cutoff: 1800 }); },
   keyTick() { this.tone({ type: "square", freq: 1500 + Math.random() * 500, to: 900, dur: .022, gain: .022, filter: "lowpass", cutoff: 2600 }); },
   kill(n) { const p = Math.pow(1.0595, Math.min(n, 12) * 2); this.tone({ type: "triangle", freq: 320 * p, to: 760 * p, dur: .13, gain: .11 }); this.noiseHit({ freq: 900, to: 180, dur: .15, gain: .1, q: .7 }); },
-  boom() { this.noiseHit({ freq: 420, to: 60, dur: .5, gain: .26, q: .5, filter: "lowpass" }); this.tone({ type: "sine", freq: 120, to: 34, dur: .45, gain: .24 }); },
+  boom() { if (!this.rateOk("boom", .07)) return; this.noiseHit({ freq: 420, to: 60, dur: .5, gain: .26, q: .5, filter: "lowpass" }); this.tone({ type: "sine", freq: 120, to: 34, dur: .45, gain: .24 }); },
   dash() { this.noiseHit({ freq: 380, to: 3200, dur: .19, gain: .1, q: 2.2 }); this.tone({ type: "sawtooth", freq: 190, to: 620, dur: .15, gain: .05, filter: "lowpass", cutoff: 1500 }); },
   echo() { [0, .05, .1].forEach((d, i) => this.tone({ type: "sine", freq: 440 + i * 220, to: 900 + i * 260, dur: .5, gain: .075, delay: d })); },
   surge() { this.tone({ type: "sawtooth", freq: 90, to: 280, dur: .9, gain: .14, filter: "lowpass", cutoff: 900 }); [0, .1, .2].forEach((d, i) => this.tone({ type: "triangle", freq: 392 * (i + 1), dur: .5, gain: .045, delay: d })); },
