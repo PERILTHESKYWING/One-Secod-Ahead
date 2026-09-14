@@ -273,8 +273,8 @@ function renderAdmin() {
   r1.appendChild(btn("Reveal all secrets", () => { SECRETS.forEach((s) => SAVE.secrets[s.id] = 1); persist(); toast("Secrets revealed", "var(--shard)"); }));
   r1.appendChild(btn("Log every enemy", () => { Object.keys(EN).forEach((k) => SAVE.seen[k] = 1); persist(); drawBestiary(); toast("Bestiary complete"); }));
   r1.appendChild(btn("+100,000 shards", () => { SAVE.shards += 100000; persist(); refreshHome(); toast("Shards granted", "var(--shard)"); }));
-  r1.appendChild(btn("Max every upgrade", () => {
-    SHOP.forEach((s) => SAVE.upgrades[s.id] = s.max);
+  r1.appendChild(btn("Own every ability", () => {
+    ABIL.forEach((a) => abilSave().owned[a.id] = 1);
     COSM.forEach((c) => SAVE.cosmetics.owned[c.id] = 1);
     syncCosmetics(); persist(); toast("Lab fully installed", "var(--chrono)");
   }));
@@ -524,6 +524,7 @@ function sim(dt) {
   updateBullets(dt);
   updateTraces(dt);
   updatePickups(dt);
+  if (!G.attract) abilTick(dt);
   if (!G.attract && BRANCHFN.field) BRANCHFN.field(dt);
   if (!G.attract) checkSecrets(dt);
   if (G.attract) attractSpawn(dt); else tickWaves(dt);
@@ -600,6 +601,11 @@ addEventListener("keydown", (e) => {
     if (G.carding && currentScreen === "none") { beginLevelWaves(); keys.add(k); return; }
     if (currentScreen === "none" && G.mode === "play") {
       if (e.code === "Space") edge.dash = true;
+      /* the loadout is bound by SLOT, so the order you arrange it in the
+         Echo Lab is the order it sits under your fingers */
+      if (k === "1") abilUse(0);
+      if (k === "2") abilUse(1);
+      if (k === "3") abilUse(2);
       if (k === "e") edge.echo = true;
     }
   }
@@ -682,6 +688,33 @@ $$("#touch .tbtn").forEach((b) => b.addEventListener("touchstart", (e) => {
 
 /* ---------------- loop -------------------------------------------------------- */
 let last = performance.now(), raf = 0, fpsAcc = 0, fpsN = 0, slowFor = 0;
+/* ---- adaptive quality --------------------------------------------------
+   This used to be a single one-way cliff: below 42fps for four samples it
+   dropped straight to .5, which switches the bloom off outright, and it
+   never came back for the rest of the session. So a machine that stuttered
+   once during a boss spent the whole run looking flat, and one that only
+   just could not afford the chromatic split lost the bloom as well.
+
+   It is a ladder now. Each rung sheds the most expensive thing left before
+   touching anything cheaper — the split first (measured at 6.5ms a frame on
+   its own), then the bloom, then particle counts — and it climbs back up
+   when the frames come back. The hysteresis gap between DROP and RECOVER is
+   what stops it oscillating on a machine sitting right on the boundary. */
+const QUALITY_RUNGS = [1, .82, .62, .4];
+const QUALITY_DROP_FPS = 46;    /* below this, shed a rung */
+const QUALITY_RECOVER_FPS = 58; /* above this, take one back */
+let qSlow = 0, qFast = 0;
+function adaptQuality() {
+  const i = QUALITY_RUNGS.indexOf(G.quality);
+  const rung = i < 0 ? 0 : i;
+  if (G.fps < QUALITY_DROP_FPS) {
+    qFast = 0;
+    if (++qSlow >= 3 && rung < QUALITY_RUNGS.length - 1) { G.quality = QUALITY_RUNGS[rung + 1]; qSlow = 0; }
+  } else if (G.fps > QUALITY_RECOVER_FPS) {
+    qSlow = 0;
+    if (++qFast >= 10 && rung > 0) { G.quality = QUALITY_RUNGS[rung - 1]; qFast = 0; }
+  } else { qSlow = 0; qFast = 0; }
+}
 function frame(now) {
   raf = requestAnimationFrame(frame);
   let dt = (now - last) / 1000;
@@ -691,7 +724,7 @@ function frame(now) {
   fpsAcc += dt; fpsN++;
   if (fpsAcc > .5) {
     G.fps = fpsN / fpsAcc; fpsAcc = 0; fpsN = 0;
-    if (G.fps < 42) { if (++slowFor > 3 && G.quality > .55) G.quality = .5; } else slowFor = 0;
+    adaptQuality();
   }
   Audio_.tick(dt);
   if (CINE.active) { cineTick(dt); return; }

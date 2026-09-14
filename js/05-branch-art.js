@@ -1442,7 +1442,8 @@ function drawEnemy(e) {
   const born = e.born < .35 ? .4 + (e.born / .35) * .6 : 1;
   const sc = born * (1 + (e.pop || 0) * .3 + clamp((e.hit || 0) / HIT_FLASH_ENEMY, 0, 1) * HIT_POP);
   if (sc !== 1) ctx.scale(sc, sc);
-  if (e.elite) eliteAura(e, c);
+  if (e.mut) specialAura(e);
+  else if (e.elite) eliteAura(e, c);
   (ART[e.type] || ART.husk)(e, c);
   if (e.hit > 0) {
     ctx.globalAlpha = clamp(e.hit / HIT_FLASH_ENEMY, 0, 1) * .92;

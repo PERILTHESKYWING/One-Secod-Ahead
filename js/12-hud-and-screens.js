@@ -4,16 +4,29 @@ const ABILITIES = [
   { id: "dash", key: "SPC", name: "dash", color: "var(--signal)" },
   { id: "echo", key: "E", name: "echo", color: "var(--echo)" },
 ];
+const FAM_COLOR = { Impact: "var(--shard)", Brand: "var(--echo)", Tempo: "var(--signal)" };
+/* The two fixed controls, then whatever the loadout is carrying. Rebuilt
+   whenever the loadout changes, so the row is always exactly the keys that
+   do something — an equipped passive still gets a tile, because knowing it
+   is running is the point of having chosen it. */
 function buildAbilities() {
   const wrap = $("#abilities");
   wrap.innerHTML = "";
-  for (const a of ABILITIES) {
+  const add = (id, key, name, color, passive) => {
     const el = document.createElement("div");
-    el.className = "ability";
-    el.style.setProperty("--ac", a.color);
-    el.innerHTML = '<i class="cd"></i><span class="key">' + a.key + '</span><span class="nm">' + a.name + '</span><span class="charges"></span>';
-    el.dataset.id = a.id;
+    el.className = "ability" + (passive ? " passive" : "");
+    el.style.setProperty("--ac", color);
+    el.innerHTML = '<i class="cd"></i><span class="key">' + key + '</span><span class="nm">' + name + '</span><span class="charges"></span>';
+    el.dataset.id = id;
     wrap.appendChild(el);
+  };
+  for (const a of ABILITIES) add(a.id, a.key, a.name, a.color, false);
+  if (typeof equippedAbilities === "function") {
+    equippedAbilities().forEach((a, i) => {
+      if (!a) return;
+      add("ab" + i, a.kind === "active" ? String(i + 1) : "·", a.name.toLowerCase(),
+        FAM_COLOR[a.fam] || "var(--chrono)", a.kind !== "active");
+    });
   }
 }
 function chargePips(el, n, max) {
@@ -62,6 +75,27 @@ function updateHUD() {
     sp.innerHTML = h; sp.dataset.n = String(p.shield);
   }
   for (const el of $("#abilities").children) {
+    if (el.dataset.id.startsWith("ab")) {
+      const slot = +el.dataset.id.slice(2);
+      const a = G.abil ? abilOf(G.abil.slots[slot]) : null;
+      if (!a) continue;
+      if (a.kind === "active") {
+        const cd = G.abil.cd[slot];
+        chargePips(el, cd > 0 ? 0 : 1, 1);
+        el.classList.toggle("ready", cd <= 0);
+        el.querySelector(".cd").style.transform = "scaleY(" + clamp(cd / a.cd, 0, 1) + ")";
+      } else {
+        /* a passive has no cooldown to show, so the tile shows whatever the
+           ability is actually accumulating instead */
+        let n = 1, max = 1;
+        if (a.id === "overclock") { n = G.abil.oc; max = 10; }
+        else if (a.id === "counterweight") { n = G.abil.bank > 60 ? 1 : 0; }
+        chargePips(el, n, max);
+        el.classList.add("ready");
+        el.querySelector(".cd").style.transform = "scaleY(0)";
+      }
+      continue;
+    }
     if (el.dataset.id === "dash") {
       const swap = !!recallTarget();
       const free = swap && G.mods.swapFree;
@@ -196,12 +230,13 @@ function togglePause(force) {
   else show("none");
 }
 /* shop */
-let shopCat = SHOP_CATS[0];
+/* initialised on the first render rather than at load, because the ability
+   catalogue lives in a file that loads after this one */
+let shopCat = null;
 const CAT_NOTES = {
-  Chassis: "Hull, repair and vents. Everything here keeps you upright a little longer.",
-  Weapon: "Pulse output. Flat numbers, and they compound with the cores you draft mid-run.",
-  Echo: "Decoy buffers and payload. The more echo you carry, the more the room splits.",
-  Modules: "Tactical hardware that changes how a fight reads, not how hard you hit.",
+  Impact: "Reads the shove: weight, distance, and what the body hits. These turn knockback into a damage source, so they want each other and they want walls.",
+  Brand: "A mark economy. One generator, two payoffs, one sustain engine — and only three slots, so a pure brand loadout has to give one of them up.",
+  Tempo: "Time. Each of these makes something else you brought fire more often, which is why two-and-one usually beats three of a kind.",
 };
 function railButton(label, owned, total, sel, onclick) {
   const b = document.createElement("button");
@@ -211,16 +246,16 @@ function railButton(label, owned, total, sel, onclick) {
   return b;
 }
 function renderShop() {
+  if (shopCat == null) shopCat = ABIL_FAMS[0];
   $("#shopBalance").textContent = fmt(SAVE.shards);
   stopPreviews();
   const rail = $("#shopRail");
   rail.innerHTML = "";
-  SHOP_CATS.forEach((c) => {
-    const list = SHOP.filter((s) => s.cat === c);
-    rail.appendChild(railButton(c,
-      list.reduce((a, s) => a + lvlOf(s.id), 0),
-      list.reduce((a, s) => a + s.max, 0),
-      c === shopCat, () => { shopCat = c; Audio_.ui(); renderShop(); }));
+  ABIL_FAMS.forEach((f) => {
+    const list = ABIL.filter((a) => a.fam === f);
+    rail.appendChild(railButton(f,
+      list.filter((a) => abilOwned(a.id)).length, list.length,
+      f === shopCat, () => { shopCat = f; Audio_.ui(); renderShop(); }));
   });
   COSM_GROUPS.forEach((g) => {
     const list = COSM.filter((c) => c.g === g.key);
@@ -234,26 +269,72 @@ function renderShop() {
   stock.innerHTML = "";
   stock.className = group ? "stock grid" : "stock";
   if (group) renderCosmetics(stock, group);
-  else renderGear(stock);
+  else renderAbilities(stock);
   refreshHome();
 }
-function renderGear(stock) {
-  SHOP.filter((s) => s.cat === shopCat).forEach((s) => {
-    const l = lvlOf(s.id), maxed = l >= s.max, cost = maxed ? 0 : s.cost(l), afford = SAVE.shards >= cost;
+/* ---- the loadout -------------------------------------------------------
+   Three slots across the top, the family's abilities under them. Buying an
+   ability does not equip it; equipping is a separate, free, reversible act,
+   because the interesting decision is which three you carry TODAY and not
+   which twelve you own. Slot order is also the keybinding (1-3). */
+function renderLoadout(stock) {
+  const bar = document.createElement("div");
+  bar.className = "loadout";
+  const eq = equippedAbilities();
+  for (let i = 0; i < ABIL_SLOTS; i++) {
+    const a = eq[i];
+    const cell = document.createElement("div");
+    cell.className = "slot" + (a ? " filled" : "") + (loadoutPick != null ? " picking" : "");
+    cell.innerHTML = '<span class="sk">' + (i + 1) + "</span>" +
+      (a ? "<h4>" + a.name + "</h4><small>" + a.fam + " · " + (a.kind === "active" ? "active" : "passive") + "</small>"
+         : "<h4>empty</h4><small>choose below</small>");
+    cell.onclick = () => {
+      if (loadoutPick != null) { abilEquip(loadoutPick, i); loadoutPick = null; Audio_.confirm(); buildAbilities(); renderShop(); return; }
+      if (a) { abilUnequip(i); Audio_.ui(); buildAbilities(); renderShop(); }
+    };
+    bar.appendChild(cell);
+  }
+  stock.appendChild(bar);
+  const hint = document.createElement("p");
+  hint.className = "loadout-hint";
+  hint.textContent = loadoutPick
+    ? "Pick a slot for " + abilOf(loadoutPick).name + "."
+    : "Three slots. Click an owned ability to equip it, or a slot to clear it. Slot number is its key in the chamber.";
+  stock.appendChild(hint);
+}
+let loadoutPick = null;
+function renderAbilities(stock) {
+  renderLoadout(stock);
+  ABIL.filter((a) => a.fam === shopCat).forEach((a) => {
+    const owned = abilOwned(a.id), slot = abilSlotOf(a.id);
+    const afford = SAVE.shards >= a.cost;
     const row = document.createElement("div");
-    row.className = "item";
-    let pips = "";
-    for (let i = 0; i < s.max; i++) pips += '<i class="pip' + (i < l ? " on" : "") + '"></i>';
-    row.innerHTML = "<div><h3>" + s.name + "</h3><p>" + s.desc + "</p>" +
-      (s.tag ? '<span class="mod-tag">' + s.tag + "</span>" : "") +
-      '<div class="pips">' + pips + "</div></div>" +
-      '<button class="buy' + (maxed ? " maxed" : "") + '"' + (maxed || !afford ? " disabled" : "") + ">" +
-      (maxed ? (s.max === 1 ? "Installed" : "Fully installed") : '<i class="shard"></i>' + fmt(cost)) + "</button>";
-    if (!maxed) row.querySelector("button").onclick = () => {
-      if (SAVE.shards < cost) { Audio_.deny(); return; }
-      SAVE.shards -= cost; SAVE.upgrades[s.id] = l + 1;
-      persist(); Audio_.buy(); renderShop();
-      toast(s.name + (s.max === 1 ? " installed" : " · level " + (l + 1)), "var(--chrono)");
+    row.className = "item ability-item" + (slot >= 0 ? " equipped" : "");
+    row.innerHTML = "<div><h3>" + a.name +
+      '<span class="mod-tag">' + (a.kind === "active" ? "active · " + a.cd + "s" : "passive") + "</span>" +
+      (a.tag ? '<span class="mod-tag alt">' + a.tag + "</span>" : "") + "</h3>" +
+      "<p>" + a.desc + "</p>" +
+      '<p class="syn"><b>Pairs with</b> ' + a.synergy + "</p></div>" +
+      '<button class="buy' + (owned ? " maxed" : "") + '"' + (!owned && !afford ? " disabled" : "") + ">" +
+      (owned ? (slot >= 0 ? "Slot " + (slot + 1) : "Equip") : (a.cost ? '<i class="shard"></i>' + fmt(a.cost) : "Free")) +
+      "</button>";
+    row.querySelector("button").onclick = () => {
+      if (!owned) {
+        if (SAVE.shards < a.cost) { Audio_.deny(); return; }
+        SAVE.shards -= a.cost; abilSave().owned[a.id] = 1; persist();
+        Audio_.buy(); toast(a.name + " acquired", "var(--chrono)");
+        renderShop();
+        return;
+      }
+      if (slot >= 0) { abilUnequip(slot); Audio_.ui(); }
+      else {
+        /* drop it in the first free slot, or ask which one to replace */
+        const free = abilSave().slots.indexOf(null);
+        const firstEmpty = free >= 0 ? free : abilSave().slots.findIndex((x) => !x);
+        if (firstEmpty >= 0) { abilEquip(a.id, firstEmpty); Audio_.confirm(); }
+        else { loadoutPick = a.id; Audio_.ui(); }
+      }
+      buildAbilities(); renderShop();
     };
     stock.appendChild(row);
   });

@@ -9,9 +9,15 @@ const PLAYER_SPEED = 340;          /* base move speed, px/s */
 const PLAYER_ACCEL = 20;           /* approach() rate toward the stick/keys */
 const PLAYER_DECEL = 30;           /* approach() rate back to a stop — higher than accel on purpose */
 const SURGE_SPEED_MUL = 1.22;      /* move speed multiplier while surge is up */
+const CHILL_SPEED = .55;           /* move speed while a Special Grade has you chilled */
 const DASH_INPUT_BUFFER = .12;     /* 120ms of grace on a dash/swap press */
 const FIRE_INPUT_BUFFER = .12;     /* 120ms of grace on the trigger */
 const MOVE_SUBSTEP = 9;            /* px per collision substep (see stepPlayer) */
+/* Every enemy projectile in the game is scaled by this. Base move speed is
+   340px/s and the dash burst is 510: with shots this much quicker you cannot
+   simply walk out of a volley any more, which is what makes the dash's
+   i-frame window the answer instead of a convenience. */
+const HOSTILE_SPEED_MUL = 1.3;
 
 /* ---------------- the dash ----------------------------------------------
    The dash used to fire along the aim, which made it an approach tool: aim
@@ -21,11 +27,11 @@ const MOVE_SUBSTEP = 9;            /* px per collision substep (see stepPlayer) 
    the gun keeps pointing wherever it was pointing — so you can dash out of
    a squeeze while still shooting into it.
 
-   Standing still there is no movement heading, so the dash falls back to
-   the last one you had if it is fresh (DASH_DIR_MEMORY), and to the aim
-   only if you have genuinely been stationary. That keeps the old
-   dash-through-a-body play available on a deliberate standing dash while
-   never hijacking an escape.
+   The aim never gets a say, not even standing still. A dash you did not
+   steer goes along the last heading you DID steer (the hull starts facing
+   up), because the alternative — falling back to the aim when you happen
+   to be between key presses — is the exact behaviour this replaced, and it
+   showed up as the dash "still going where the mouse points".
 
    What makes it an escape rather than a fast walk is the window on the far
    side of it: the i-frames outlast the dash itself, and a speed burst
@@ -34,7 +40,6 @@ const MOVE_SUBSTEP = 9;            /* px per collision substep (see stepPlayer) 
 const DASH_SPEED = 1180;           /* px/s during the launch */
 const DASH_TIME = .17;             /* how long the launch lasts */
 const DASH_EXIT_IFRAME = .16;      /* extra invulnerable grace after it ends */
-const DASH_DIR_MEMORY = .35;       /* how stale a movement heading may be and still steer a dash */
 const DASH_SURGE_TIME = .42;       /* speed-burst window opened by a dash */
 const DASH_SURGE_MUL = 1.5;        /* move-speed multiplier inside that window */
 const DASH_EXIT_SPEED = 1.18;      /* speed the dash hands off at, as a multiple of the burst speed */
@@ -141,6 +146,7 @@ function makePlayer() {
     surge: 0, surgeActive: 0,
     shieldMax: lvlOf("shield"), shield: lvlOf("shield"), shieldCd: 0,
     hist: [], regen: lvlOf("regen") * .5, windUsed: false,
+    burn: [], burnAt: null, chill: 0,
     recallCd: 0, swapFlash: 0,
   };
 }
@@ -161,6 +167,10 @@ function newRun(survival) {
   G.survival = !!survival; G.elites = 0;
   G.chroma = 0; G.slowmo = 0; G.deathT = 0;
   G.mods = baseMods(); G.cores = {};
+  abilReset();
+  /* the HUD row is the loadout, so it is rebuilt with the loadout rather
+     than once at boot */
+  buildAbilities();
   G.score = 0; G.kills = 0; G.shards = 0; G.combo = 0; G.comboTimer = 0; G.runTime = 0;
   G.levelIdx = 0; G.loop = 0; G.wave = 0; G.breather = 0; G.draftIn = 0;
   clearWorld();
@@ -269,14 +279,17 @@ function startWave(n) {
   if (G.survival) { startSurvivalWave(n); return; }
   const tier = G.loop * 6 + G.levelIdx;
   const isBoss = L.boss && n === L.waves;
-  const budget = Math.round(6 + tier * 3.4 + n * 2.4 + G.loop * 7);
+  /* The opening waves used to be a warm-up for a pilot who had not bought
+     anything yet. That pilot no longer exists, so wave 1 now lands with
+     roughly double the bodies it used to and the per-wave ramp is steeper. */
+  const budget = Math.round(12 + tier * 3.8 + n * 3.4 + G.loop * 8);
   G.queue = [];
   if (isBoss) {
     G.queue.push({ type: TL.boss, t: 1 });
     const add = TL.roster[0];
     for (let i = 0; i < 5; i++) G.queue.push({ type: add, t: 2.4 + i * .6 });
   } else {
-    const eliteOdds = clamp((tier - 1) * .035, 0, .3);
+    const eliteOdds = clamp((tier - 1) * .04 + .03, 0, .34);
     const tmplId = L.waveTemplates && L.waveTemplates.length ? L.waveTemplates[(n - 1) % L.waveTemplates.length] : null;
     const tmpl = tmplId && WAVE_TEMPLATES[tmplId];
     G.queue = tmpl ? tmpl(L.types, budget, tier, eliteOdds) : fillBudget(L.types, budget, eliteOdds);
@@ -287,44 +300,52 @@ function startWave(n) {
   else if (n === 1) banner(L.name, L.hook.split(".")[0].toLowerCase());
   else banner("Wave " + n, "of " + L.waves);
 }
-/* ---- survival: one chamber, no end, everything gets worse ------------- */
-const SURV_UNLOCK = [
-  { w: 1, t: ["husk", "dart"] },
-  { w: 3, t: ["bloom"] },
-  { w: 5, t: ["bulwark", "spore"] },
-  { w: 7, t: ["weaver", "colossus"] },
-  { w: 9, t: ["needle", "howitzer"] },
-  { w: 12, t: ["mimic", "broodmother"] },
-  { w: 15, t: ["mirror", "hexer"] },
-  { w: 18, t: ["revenant", "warden"] },
-];
-function survivalTypes(w) {
+/* ---- survival: one chamber, no end, everything gets worse -------------
+   Two rules changed here.
+
+   NO BOSS. Survival used to drop a Paradox every tenth wave, which turned a
+   pure endurance mode into a boss-rush with waiting in between. What replaces
+   it is the SPECIAL GRADE (see 16-abilities.js): any body that walks in can
+   roll a gold-coronaed mutation with raised stats and an ability its ordinary
+   version does not have, and the odds climb with the wave. The spike comes
+   from the room getting stranger rather than from one scheduled monster.
+
+   EVERY ENEMY, FROM WAVE ONE. The old staged unlock meant the first ten
+   waves could only ever produce four kinds of trouble, and anything drafted
+   from the later chambers never showed up at all. The whole Chamber 09
+   roster is in the pool immediately; the wave budget is what stops wave 1
+   from being three Broodmothers, not a list of what you are allowed to meet
+   yet. */
+function survivalTypes() {
   const out = [];
-  for (const g of SURV_UNLOCK) if (w >= g.w) for (const t of g.t) out.push(t);
+  for (const L of CH09_LEVELS) for (const t of L.types) if (out.indexOf(t) < 0) out.push(t);
   return out;
-}
-function survivalNewAt(w) {
-  const g = SURV_UNLOCK.find((x) => x.w === w);
-  return g ? g.t : null;
 }
 function startSurvivalWave(n) {
   const idx = ((n - 1) / 4 | 0) % LEVELS.length;
   if (idx !== G.levelIdx) { G.levelIdx = idx; backdropDirty = true; Audio_.setPalette(curLevel()); }
-  const types = survivalTypes(n);
-  const isBoss = n % 10 === 0;
-  const budget = Math.round(6 + n * 3.4);
-  const eliteOdds = clamp((n - 4) * .038, 0, .42);
+  const types = survivalTypes();
+  const budget = Math.round(12 + n * 3.8);
+  const eliteOdds = clamp((n - 3) * .04, 0, .42);
+  /* Everything is in the pool from wave one, but the early waves are drawn
+     with a bias toward the cheap end, easing off as the waves climb. Without
+     it the whole roster being available means wave 1 is a coin flip between
+     five Husks and two Broodmothers, and neither of those is a first wave.
+     By about wave 20 the bias is gone and the draw is flat. */
+  const bias = clamp(1 - (n - 1) / 20, 0, 1);
+  const drawType = () => {
+    if (bias <= 0) return pick(types);
+    let best = pick(types);
+    /* take the cheaper of two draws, `bias` of the time */
+    if (chance(bias)) { const alt = pick(types); if (EN[alt].cost < EN[best].cost) best = alt; }
+    return best;
+  };
   G.queue = [];
-  if (isBoss) {
-    G.queue.push({ type: "paradox", t: 1.2 });
-    for (let i = 0; i < 4 + (n / 10 | 0); i++) G.queue.push({ type: pick(types), t: 3 + i * .7 });
-  }
-  let spent = 0, t = isBoss ? 6 : 0;
-  const cap = isBoss ? budget * .5 : budget;
-  while (spent < cap) {
-    const type = pick(types);
+  let spent = 0, t = 0;
+  while (spent < budget) {
+    const type = drawType();
     const c = EN[type].cost;
-    if (spent + c > cap + 2) break;
+    if (spent + c > budget + 2) break;
     const el = c >= 2 && chance(eliteOdds);
     spent += c * (el ? 2 : 1);
     G.queue.push({ type, t, elite: el });
@@ -333,10 +354,10 @@ function startSurvivalWave(n) {
   }
   Audio_.waveIn();
   updateWaveDots();
-  const fresh = survivalNewAt(n);
-  if (isBoss) banner("Paradox", "wave " + n + " · it came itself");
-  else if (fresh) banner("Wave " + n, "new arrival: " + fresh.map((x) => EN[x].label.toLowerCase()).join(" and "));
-  else banner("Wave " + n, n < 6 ? "hold the chamber" : n < 14 ? "it is getting crowded" : "no more excuses");
+  const odds = Math.round(mutChance() * 100);
+  banner("Wave " + n, n < 6 ? "hold the chamber"
+    : n < 14 ? "special grade · " + odds + "%"
+    : "no more excuses · special grade " + odds + "%");
 }
 /* `side` ("top"/"right"/"bottom"/"left") lets a wave template choose which
    flank an enemy steps in from instead of a fully random edge — a branch
@@ -351,24 +372,32 @@ function edgePoint(side) {
   if (e === 2) return { x: rnd(W - pad, pad), y: H - pad };
   return { x: pad, y: rnd(H - pad, pad) };
 }
+/* The pilot no longer buys stats — every permanent upgrade starts maxed (see
+   BASELINE in 01-engine-core.js), so the fight has to come up to meet it.
+   These are flat multipliers on every body in the game, on top of the
+   existing per-level tier scaling. Health carries most of it; speed carries
+   least, because speed is what makes a room unreadable rather than hard. */
+const ENEMY_HP_BUFF = 1.4;
+const ENEMY_DMG_BUFF = 1.18;
+const ENEMY_SPEED_BUFF = 1.08;
 function spawnEnemy(type, x, y, elite) {
   const d = EN[type];
   const tier = tierNow();
   /* a branch can be flatly harder than the baseline — see TIMELINES[].diff.
-     Health takes the multiplier whole; speed takes a third of it, because
-     speed is what makes a room unreadable rather than difficult. */
+     Health takes the multiplier whole; speed takes a third of it. */
   const diff = TL && TL.diff ? TL.diff : 1;
-  const hpMul = (1 + tier * .17 + G.loop * .5) * (elite ? 2.4 : 1) * diff;
-  const spMul = Math.min(1.65, 1 + tier * .024) * (elite ? 1.16 : 1) * (1 + (diff - 1) * .34);
+  const hpMul = (1 + tier * .17 + G.loop * .5) * (elite ? 2.4 : 1) * diff * ENEMY_HP_BUFF;
+  const spMul = Math.min(1.65, 1 + tier * .024) * (elite ? 1.16 : 1) * (1 + (diff - 1) * .34) * ENEMY_SPEED_BUFF;
   const e = {
     type, x, y, vx: 0, vy: 0, r: d.r, hp: d.hp * hpMul, maxHp: d.hp * hpMul,
-    sp: d.sp * spMul, dmg: d.dmg, ang: rnd(TAU), wob: rnd(TAU), hit: 0, state: 0,
+    sp: d.sp * spMul, dmg: d.dmg * ENEMY_DMG_BUFF, ang: rnd(TAU), wob: rnd(TAU), hit: 0, state: 0,
     timer: rnd(.4, 1.6), born: 0, sh: null, blink: 1, blinkT: rnd(3, 1),
     face: rnd(TAU), deflect: 0, fuse: 0, lockAng: 0, pop: 0, tether: 0, birth: 0, burst: 0,
+    stun: 0, brand: 0, brandT: 0, mut: null, iframeT: 0,
     elite: !!elite, mod: "",
   };
   if (elite) {
-    e.r = d.r * 1.16; e.dmg = d.dmg * 1.35;
+    e.r = d.r * 1.16; e.dmg = d.dmg * 1.35 * ENEMY_DMG_BUFF;
     e.mod = pick(["armoured", "frenzied", "volatile"]);
     if (e.mod === "frenzied") { e.sp *= 1.45; e.rateMul = 1.6; }
     if (e.mod === "armoured") { e.sp *= .85; e.armour = .55; }
@@ -380,6 +409,11 @@ function spawnEnemy(type, x, y, elite) {
   if (type === "sounding") e.load = 0;
   if (type === "trench") e.sub = 0;
   if (type === "mimic") e.delay = rint(70, 110);
+  /* survival only: the roll that turns an ordinary body into a Special
+     Grade. Done here rather than at the wave level so it applies to
+     everything that ever enters the room — including the ones other enemies
+     summon or split into. */
+  if (G.survival && !BOSSES[type] && chance(mutChance())) makeSpecial(e);
   G.enemies.push(e);
   if (!SAVE.seen[type]) { SAVE.seen[type] = 1; persist(); }
   return e;
@@ -462,6 +496,14 @@ function damageEnemy(e, dmg, opt) {
   if (!opt.noCrit && m.crit > 0 && chance(m.crit)) { d *= m.critMul; crit = true; }
   if (G.player && G.player.surgeActive > 0) d *= 1.5;
   if (e.armour) d *= (1 - e.armour);
+  /* a branded body takes more from every source, not only from the ability
+     that branded it — that is what makes Phase Brand worth a slot on its own */
+  if (e.brand > 0) d *= brandAmp(e);
+  /* a Special Grade's own ward, and any ward being projected onto it by a
+     Special Grade standing nearby */
+  d = mutResist(e, d);
+  if (G.survival) d *= mutAuraResist(e);
+  if (e.iframeT > 0) return;
   e.hp -= d; e.hit = HIT_FLASH_ENEMY;
   /* which way the hit came in: given by the caller, or read off the impact
      point. Area damage has neither, and keeps its old radial spray. */
@@ -481,7 +523,17 @@ function damageEnemy(e, dmg, opt) {
 }
 function killEnemy(e) {
   if (e.dead) return;
+  /* Flagged dead FIRST, before any on-death effect runs. A Special Grade
+     whose mutation is an explosion damages everything nearby — including
+     itself, since it is still in G.enemies — and without this flag that is
+     an infinite recursion: explode, re-kill, explode. damageEnemy ignores
+     anything already flagged, so the flag is the base case. */
   e.dead = true;
+  /* a Special Grade with Second Wind gets back up once (and clears the flag
+     again), and nothing else in the death pipeline runs — no shards, no
+     score, no corpse. The ones that do not revive drop their burst / rot /
+     split here instead and carry on dying normally. */
+  if (e.mut && mutOnDeath(e)) return;
   const m = G.mods, d = EN[e.type], col = ecol(d.col);
   corpse(e, col);
   debris(e.x, e.y, clamp(Math.round(e.r * .55), 3, 14), col, e.r > 18 ? 1.3 : .85, { size: e.r / 14 });
@@ -489,7 +541,7 @@ function killEnemy(e) {
   if (e.elite) {
     flash(.09, "255,214,138");
     ring(e.x, e.y, "255,214,138", 8, 190, .5, 4);
-    if (e.mod === "volatile") explode(e.x, e.y, 168, 30, "255,196,120");
+    if (e.mod === "volatile") explode(e.x, e.y, 168, 30, "255,196,120", 1);
   }
   G.combo++; G.comboTimer = 3.2;
   G.score += Math.round(d.score * (1 + Math.min(G.combo, 30) * .1) * (1 + (G.levelIdx + G.loop * 6) * .12));
@@ -519,6 +571,7 @@ function killEnemy(e) {
     }
   }
   G.killed[e.type] = (G.killed[e.type] || 0) + 1;
+  abilOnKill(e);
   if (BRANCHFN.onKill) BRANCHFN.onKill(e);
   if (BOSSES[e.type]) {
     G.boss = null; flash(.5, col); shake(TRAUMA_DEATH_BOSS_BONUS);
@@ -533,10 +586,19 @@ function killEnemy(e) {
   const i = G.enemies.indexOf(e);
   if (i >= 0) G.enemies.splice(i, 1);
 }
-function explode(x, y, r, dmgPlayer, col) {
-  ring(x, y, col, 8, r, .34, 4);
-  boomFx(x, y, col, r / 60, { n: 34, force: 1.6, r: 16 });
-  flash(.09, col); shake(.3); Audio_.boom();
+/* `quiet` strips an explosion back to its damage and a token ring: no
+   screen flash, no camera shake, no audio, a fifth of the debris. Anything
+   that can fire in BULK passes it — Volatile rounds detonating on every
+   pellet of a multishot, a chain arc, a burning trail. One explosion is a
+   moment; twenty in a frame is a slideshow that also sounds like mud, and
+   they were the single worst offender for frame time.
+   The set-piece explosions (a Bloom opening, a depth charge, a boss) still
+   come through loud. */
+function explode(x, y, r, dmgPlayer, col, quiet) {
+  ring(x, y, col, 8, r, .34, quiet ? 2 : 4);
+  boomFx(x, y, col, r / 60, { n: quiet ? 7 : 34, force: quiet ? 1 : 1.6, r: 16 });
+  if (!quiet) { flash(.09, col); shake(.3); Audio_.boom(); }
+  else if (Audio_.rateOk("bulkboom", .12)) { Audio_.boom(); shake(.08); }
   for (const e of G.enemies.slice()) {
     const d = dist(e, { x, y });
     if (d < r + e.r) damageEnemy(e, 46 * (1 - d / (r + e.r)) + 14, { noCrit: true });
@@ -585,9 +647,12 @@ function hurtPlayer(n, src, shot) {
     else directionalBurst(p.x, p.y, 8, "255,90,124", 1, hitAng);
     if (kbAng != null) {
       /* the power curve does the work: a Facet's thin ray nudges you, a
-         Howitzer shell throws you most of a body length */
+         Howitzer shell throws you most of a body length. Counterweight, if
+         it is equipped, banks the shove instead of taking it. */
       const kbMag = playerKbMag(n);
-      p.kb.x += Math.cos(kbAng) * kbMag; p.kb.y += Math.sin(kbAng) * kbMag;
+      if (!abilEatKnockback(kbMag)) {
+        p.kb.x += Math.cos(kbAng) * kbMag; p.kb.y += Math.sin(kbAng) * kbMag;
+      }
     }
     /* only a real hit stops the frame — chip and tick damage never would,
        or being tethered would stutter the whole room */
@@ -637,7 +702,8 @@ function fire() {
     G.bullets.push({ x: p.x, y: p.y,
       vx: Math.cos(a) * 980, vy: Math.sin(a) * 980, dmg, r: 3.4, life: 1.15, pierce: m.pierce, hits: [] });
   }
-  p.fireCd = .152 / m.rateMul;
+  abilOnFire(p.x, p.y, p.aim, dmg);
+  p.fireCd = .152 / (m.rateMul * abilRateMul());
   p.vx -= Math.cos(p.aim) * 24; p.vy -= Math.sin(p.aim) * 24;
   p.fireKick = 1;
   Audio_.shoot(1 + rnd(-.06, .06));
@@ -707,13 +773,9 @@ function doRecall(c) {
     }
   }
 }
-/* Where a dash goes. The movement heading if you have one, the one you had
-   a moment ago if you just let go, and the aim only if you have actually
-   been standing still. */
-function dashDir(p) {
-  if (p.moveT <= DASH_DIR_MEMORY) return p.moveAng;
-  return p.aim;
-}
+/* Where a dash goes: the direction you are steering, full stop. If you are
+   not steering right now, the last direction you steered — never the aim. */
+function dashDir(p) { return p.moveAng; }
 /* One button. With a decoy on the field it is a swap and nothing else —
    there is no dash to fumble for, and no modifier key to remember. */
 function doDash() {
@@ -728,6 +790,7 @@ function doDash() {
   if (p.dash <= 0) return;
   p.dash--; p.dashCd = Math.max(p.dashCd, .85 * m.dashCdMul);
   p.dashing = DASH_TIME; p.dashHits = []; p.pop = .7;
+  p.burnAt = null;   /* the trail is laid by distance, so each dash starts fresh */
   /* the i-frame covers the launch AND the landing, so the frames where you
      are slow again but still next to whatever you dashed past are not the
      frames that kill you */
@@ -747,9 +810,12 @@ function doDash() {
   shock(p.x, p.y, { r0: 12, r1: 150, life: .3, col: TH.core, w: 5, ang: a + Math.PI, arc: 2.2 });
   burst(p.x, p.y, 18, TH.core, 1.3, { life: .34 });
   for (let i = 0; i < 3; i++) ghost(p.x - Math.cos(a) * i * 9, p.y - Math.sin(a) * i * 9, a, TH.core, { r: p.r, life: .2 + i * .05, a: .4 });
-  G.chroma = Math.max(G.chroma, .45);
+  /* below SPLIT_MIN on purpose: a dash is frequent, and the frames right
+     after one are the frames you most need to be responsive */
+  G.chroma = Math.max(G.chroma, .34);
   if (BRANCHFN.id === "emberwake" && G.heat > .05) { G.heat = 0; Audio_.vent(); ring(p.x, p.y, "255,190,110", 10, 96, .35, 3); }
   shake(TRAUMA_DASH_LAUNCH, Math.cos(a), Math.sin(a)); flash(.05); Audio_.dash();
+  abilOnDash(p);
   if (m.dashShock > 0) {
     const R = 150 + m.dashShock * 30;
     ring(p.x, p.y, TH.core, 12, R, .36, 3);
@@ -760,6 +826,45 @@ function doDash() {
         damageEnemy(e, 26 * m.dashShock * m.dmgMul, { noCrit: true, ang });
       }
     }
+  }
+}
+/* ---- the dash's burning trail -----------------------------------------
+   This was the worst performance bug in the game. It rolled a 60% chance
+   EVERY FRAME of the dash and dropped a fresh 2.2-second zone each time, so
+   one dash left about six overlapping zones and a dash-heavy build kept
+   twenty-plus alive at once. Every zone is checked against every enemy every
+   frame and drawn as its own filled path, and each overlapping zone re-ran
+   damageEnemy on the same body — which then rolled its own sparks. The cost
+   was quadratic in a build that dashes often, which is exactly the build
+   that takes the trail.
+
+   It is laid by DISTANCE now, not by frame: one patch per BURN_STEP pixels
+   travelled, so the trail is identical at 30fps and 144fps and a dash lays a
+   fixed, small number of them regardless. They are bigger and shorter-lived
+   to cover the same ground with a quarter of the entities, and they are
+   capped separately from everything else so a trail can never crowd out the
+   room's own hazards. */
+const BURN_STEP = 34;     /* px of travel between patches */
+const BURN_R = 40;        /* patch radius — wider, so fewer of them cover the lane */
+const BURN_LIFE = 1.5;    /* seconds a patch burns */
+const BURN_DPS = 46;      /* damage per second, per stack of the core */
+const BURN_MAX = 7;       /* patches one trail may have alive at once */
+function burnTrail(p, m) {
+  if (m.dashBurn <= 0) return;
+  const last = p.burnAt;
+  if (last && Math.hypot(p.x - last.x, p.y - last.y) < BURN_STEP) return;
+  p.burnAt = { x: p.x, y: p.y };
+  p.burn = p.burn || [];
+  const z = { x: p.x, y: p.y, r: BURN_R, life: BURN_LIFE, max: BURN_LIFE,
+    dps: BURN_DPS * m.dashBurn, col: "255,146,72" };
+  p.burn.push(z);
+  G.zones.push(z);
+  /* retire our own oldest rather than letting the shared cap decide, so a
+     long dash chain never evicts a Bloom's fire or a Howitzer's shells */
+  while (p.burn.length > BURN_MAX) {
+    const old = p.burn.shift();
+    const i = G.zones.indexOf(old);
+    if (i >= 0) G.zones.splice(i, 1);
   }
 }
 function summonEcho() {
@@ -839,6 +944,7 @@ function updatePlayer(dt, input) {
     p.dashAng = null;
   }
   p.dashSurge = Math.max(0, p.dashSurge - dt);
+  p.chill = Math.max(0, (p.chill || 0) - dt);
   p.surgeActive = Math.max(0, p.surgeActive - dt);
   p.recallCd = Math.max(0, p.recallCd - dt);
   p.swapFlash = Math.max(0, p.swapFlash - dt * 2.2);
@@ -870,7 +976,7 @@ function updatePlayer(dt, input) {
 
   if (p.dashing > 0) {
     p.vx *= Math.pow(.12, dt); p.vy *= Math.pow(.12, dt);
-    if (m.dashBurn > 0 && chance(.6)) zone(p.x, p.y, 26, 2.2, 34 * m.dashBurn, "255,146,72");
+    burnTrail(p, m);
     burst(p.x, p.y, 2, TH.core, .3, { life: .3, size: rnd(1.4, 3) });
     if (chance(dt * 70)) ghost(p.x, p.y, p.aim, TH.core, { r: p.r, life: .26, a: .38 });
     for (const e of G.enemies.slice()) {
@@ -887,7 +993,8 @@ function updatePlayer(dt, input) {
     }
   } else {
     const sp = PLAYER_SPEED * m.speedMul * (p.surgeActive > 0 ? SURGE_SPEED_MUL : 1)
-      * (p.dashSurge > 0 ? DASH_SURGE_MUL : 1);
+      * (p.dashSurge > 0 ? DASH_SURGE_MUL : 1) * abilSpeedMul()
+      * (p.chill > 0 ? CHILL_SPEED : 1);   /* a Special Grade Rime got you */
     /* coming off the keys pulls harder than getting on them, so letting go
        stops you instead of skating you across the floor */
     const rate = Math.hypot(input.mx, input.my) > .05 ? PLAYER_ACCEL : PLAYER_DECEL;
@@ -902,6 +1009,13 @@ function updatePlayer(dt, input) {
   else if (stretchTo > 0 && (p.vx !== prevVx || p.vy !== prevVy)) p.stretchAng = Math.atan2(p.vy - prevVy, p.vx - prevVx);
   p.stretch = Math.max(stretchTo, approach(p.stretch || 0, 0, SQUASH_DECAY, dt));
   stepPlayer(p, dt);
+  /* `env` is a PER-FRAME accumulator, not a velocity: everything that pushes
+     you adds to it during the rest of the frame (an Emberwake heatwave, a
+     Special Grade Warden's drag) and stepPlayer spends it here. Clearing it
+     immediately is what stops those contributions stacking — without this a
+     constant pusher climbs without limit and eventually throws you across
+     the room at a thousand px/s. */
+  p.env.x = 0; p.env.y = 0;
   /* held or tapped, the press is remembered for a beat: if the cooldown
      clears inside the window the shot goes out on that frame instead of
      needing a second press */
@@ -946,7 +1060,7 @@ function updateEchoes(dt) {
     if (c.life <= 0 || c.hp <= 0) {
       burst(c.x, c.y, 28, TH.echo, 1.2);
       ring(c.x, c.y, TH.echo, 8, 72, .4, 2.4);
-      if (m.echoBoom > 0) explode(c.x, c.y, 152, 0, TH.echo);
+      if (m.echoBoom > 0) explode(c.x, c.y, 152, 0, TH.echo, 1);
       G.echoes.splice(i, 1);
     }
   }

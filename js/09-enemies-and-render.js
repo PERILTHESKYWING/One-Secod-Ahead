@@ -29,6 +29,10 @@ const SHOVE_STRETCH_NORM = 90;  /* travel distance that deforms the body to the 
    figure for every enemy, applied to velocity so it dies the instant you
    step away, and never to p.kb */
 const CONTACT_SEPARATION = 150;
+/* how violent a moment has to be before it earns the chromatic split; see
+   the note in render() for why this is a performance constant, not a taste
+   one. Ordinary combat trauma peaks well under this. */
+const SPLIT_MIN = .5;
 const SHAKE_OFFSET = 20;  /* px of camera travel at full trauma */
 const SHAKE_DIR_BIAS = 6; /* px of extra push along a directional hit */
 const SHAKE_TILT = .011;  /* radians of camera roll at full trauma */
@@ -68,8 +72,9 @@ function shoveStretch(s) {
 }
 function enWeight(e) {
   const d = EN[e.type];
-  /* an armoured elite plants itself harder than the stock body does */
-  return Math.max(.2, (d && d.wt ? d.wt : 1) * (e.mod === "armoured" ? 1.5 : 1));
+  /* an armoured elite plants itself harder than the stock body does, and a
+     Special Grade harder still */
+  return Math.max(.2, (d && d.wt ? d.wt : 1) * (e.mod === "armoured" ? 1.5 : 1) * mutWeight(e));
 }
 /* `dist` is px of travel for a weight-1.0 body. A shove landing on top of
    one already in flight doesn't queue behind it or stomp it: whatever
@@ -105,11 +110,42 @@ function tickShove(e, dt) {
     const n = Math.min(6, Math.max(1, Math.ceil(Math.abs(step) / 9)));
     const cx = Math.cos(s.ang) * (step / n), cy = Math.sin(s.ang) * (step / n);
     for (let i = 0; i < n; i++) {
+      const bx = e.x, by = e.y;
       e.x += cx; e.y += cy;
       if (!BOSSES[e.type]) arenaPush(e);
+      keepOnScreen(e);
+      /* How much of this substep actually happened. A wall or the room's
+         edge eats it, and Piledriver is the ability that cares: the gap
+         between what the shove asked for and what it got IS the impact. */
+      s.moved = (s.moved || 0) + Math.hypot(e.x - bx, e.y - by);
+      s.asked = (s.asked || 0) + Math.hypot(cx, cy);
     }
   }
-  if (s.t >= s.dur) e.sh = null;
+  if (s.t >= s.dur) {
+    const blocked = s.asked > 0 && s.moved < s.asked * .55;
+    abilOnShoveEnd(e, s.dist, blocked, s.ang);
+    e.sh = null;
+  }
+}
+
+/* Everything hostile stays where you can see it. Enemies used to be allowed
+   60px outside the canvas on every side, which meant a Weaver could sit off
+   the edge shelling you from somewhere you could not shoot back at, and a
+   Trench could surface half off-screen. The one exception is a body being
+   SHOVED BY YOU: a shove that stopped dead at the edge would rob the
+   knockback of its whole payoff, so while a shove is in flight the body may
+   leave, and it is walked back in as soon as the shove has played out. */
+const SCREEN_MARGIN = 6;    /* px of the body allowed to overhang normally */
+const SHOVE_OVERHANG = .55; /* ...and as a fraction of the body, mid-shove */
+function keepOnScreen(e) {
+  /* Mid-shove the body may press into the edge and hang over it, because a
+     shove that stopped dead at the boundary throws away the payoff of the
+     knockback. It is still a HARD limit rather than free rein: the body
+     stays readable, and the edge stays something a shove can slam it into,
+     which is what Piledriver is reading when it asks whether the shove was
+     blocked. */
+  const r = e.sh ? -e.r * SHOVE_OVERHANG : Math.max(4, e.r - SCREEN_MARGIN);
+  e.x = clamp(e.x, r, W - r); e.y = clamp(e.y, r, H - r);
 }
 
 /* ---------------- enemies ------------------------------------------------ */
@@ -121,9 +157,14 @@ function targetFor(e) {
   return best;
 }
 function enemyShoot(e, ang, speed, dmg, r) {
+  speed *= HOSTILE_SPEED_MUL;
   const h = { x: e.x, y: e.y, vx: Math.cos(ang) * speed, vy: Math.sin(ang) * speed, r: r || 7,
     dmg, life: 6, col: ecol(EN[e.type].col), spin: 0, split: 0 };
   G.hostiles.push(h);
+  /* one funnel for every shot in the game, so a Special Grade's volley
+     widens whatever its base AI happens to fire without any of the thirty-six
+     AI branches needing to know about it */
+  if (e.mut) mutOnShoot(e, h, ang);
   return h;
 }
 function splitOrb(h) {
@@ -167,9 +208,24 @@ function updateEnemies(dt) {
     e.blinkT -= dt;
     if (e.blinkT <= 0) { e.blinkT = rnd(5, 1.6); e.blink = 0; }
     e.blink = approach(e.blink, 1, 9, dt);
-    for (const z of G.zones) if (dist(e, z) < z.r + e.r) damageEnemy(e, z.dps * dt, { spark: chance(.1) });
+    /* one damage call per body per frame, not one per overlapping patch.
+       A burning trail lays overlapping ground by design, and the old loop
+       ran the whole damage pipeline (crit roll, spark, floating text, death
+       check) once for every patch a body was standing in — so a doubled-back
+       dash trail cost several times as much AND deleted things several times
+       faster than the numbers said it should. */
+    let zdps = 0;
+    for (const z of G.zones) if (dist(e, z) < z.r + e.r) zdps += z.dps;
+    if (zdps > 0) damageEnemy(e, zdps * dt, { spark: chance(.08) });
     if (e.dead) continue;
-    const dte = dt * slowAll * (BRANCHFN.slowAt ? BRANCHFN.slowAt(e.x, e.y) : 1);
+    /* everything that can slow a body down, multiplied together: the surge,
+       the branch's own floor, and a Stutter Field if one is equipped */
+    let dte = dt * slowAll * (BRANCHFN.slowAt ? BRANCHFN.slowAt(e.x, e.y) : 1) * abilSlowAt(e.x, e.y);
+    /* a stunned body does nothing at all — no move, no aim, no wind-up */
+    if (e.stun > 0) { e.stun -= dt; dte = 0; }
+    if (e.iframeT > 0) e.iframeT -= dt;
+    if (e.mut) { mutTick(e, dt); dte *= mutSpeedMul(e); }
+    if (e.brandT > 0) { e.brandT -= dt; if (e.brandT <= 0) e.brand = 0; }
     const dtr = dte * (e.rateMul || 1);
     const t = targetFor(e);
     const ang = Math.atan2(t.y - e.y, t.x - e.x);
@@ -483,7 +539,7 @@ function updateEnemies(dt) {
       if (e.wallN || !e.los) slideAlongWall(e, dte, t);
     }
     tickShove(e, dt);
-    e.x = clamp(e.x, -60, W + 60); e.y = clamp(e.y, -60, H + 60);
+    keepOnScreen(e);
 
     if (e.type !== "bloom") {
       const d = dist(e, t);
@@ -638,6 +694,8 @@ function updateBullets(dt) {
           }
         }
         b.hits.push(e);
+        abilOnHit(e, b, b.dmg);
+        if (e.mut) mutOnPulse(e, b);
         damageEnemy(e, b.dmg, { x: b.x, y: b.y });
         if (!e.dead) {
           /* a connecting pulse nudges what it hits and taps the camera. One
@@ -649,7 +707,12 @@ function updateBullets(dt) {
           if (!b.echo) shake(TRAUMA_HIT);
         }
         Audio_.hit();
-        if (m.explosive > 0 && !b.echo) explode(b.x, b.y, 80, 0, "255,180,120");
+        /* Volatile rounds fire on every pellet that connects, so this is the
+           bulk case by definition: quiet, and the shared rate gate inside
+           explode() keeps a multishot burst into a pack costing about one
+           explosion's worth of frame time rather than six. Damage is never
+           gated, only the noise. */
+        if (m.explosive > 0 && !b.echo) explode(b.x, b.y, 80, 0, "255,180,120", 1);
         if (b.pierce > 0) b.pierce--;
         else { G.bullets.splice(i, 1); }
         break;
@@ -741,6 +804,7 @@ function drawWorld() {
   }
   ctx.globalAlpha = 1;
   if (BRANCHFN.paint && !G.attract) { ctx.save(); try { BRANCHFN.paint(); } catch (err) {} ctx.restore(); }
+  if (!G.attract) { ctx.save(); try { abilPaint(); } catch (err) {} ctx.restore(); }
   if (!G.attract) drawSeal();
   ctx.globalAlpha = 1;
   for (const z of G.zones) {
@@ -799,6 +863,7 @@ function drawWorld() {
   drawCorpses();
   for (const c of G.echoes) drawEcho(c);
   for (const e of G.enemies) drawEnemy(e);
+  for (const e of G.enemies) { drawBrand(e); drawSpecialPlate(e); }
   /* the walls go down here, between the enemies and the player: a body
      standing behind cover is hidden by it, which is what makes a player
      read the wall as cover instead of as a pattern on the floor. The
@@ -833,6 +898,7 @@ function drawWorld() {
     ctx.stroke();
   }
   if (BRANCHFN.over && !G.attract) { ctx.save(); try { BRANCHFN.over(); } catch (err) {} ctx.restore(); }
+  if (!G.attract) { ctx.save(); try { abilOver(); } catch (err) {} ctx.restore(); }
   if (!G.attract) drawBossBar();
   drawDebris();
   drawGhosts();
@@ -941,7 +1007,9 @@ function render() {
   }
   drawWorld();
   ctx.restore();
-  if (s.bloom && G.quality > .7) {
+  /* the bloom survives one rung longer than the split does — it is the
+     cheaper of the two and it carries most of the look */
+  if (s.bloom && G.quality > .5) {
     bctx.setTransform(1, 0, 0, 1, 0, 0);
     bctx.clearRect(0, 0, bloomC.width, bloomC.height);
     bctx.filter = TH.dim ? "blur(3px) brightness(1.5) saturate(1.2)" : "blur(3px) brightness(1.15) saturate(1.3)";
@@ -951,11 +1019,24 @@ function render() {
     ctx.globalCompositeOperation = "lighter";
     ctx.globalAlpha = TH.bloom;
     ctx.drawImage(bloomC, 0, 0, W, H);
+    /* The chromatic split: two extra FULL-SCREEN "lighter" composites of the
+       bloom buffer. Measured, that is 6.5ms a frame on its own — half the
+       entire render pass, and more than the bloom it decorates.
+
+       It was firing almost permanently. The trigger is max(trauma, chroma),
+       trauma is raised by every single connecting pulse, and a dash sets
+       chroma to .45 outright — so in any sustained fight it was always above
+       the old .25 threshold, and dashing pinned it there. That is the lag.
+
+       Now: one offset copy instead of two, only above SPLIT_MIN (which
+       ordinary combat trauma does not reach — it takes a death, a boss hit
+       or a Time-Swap), and only when the frame budget is healthy. The effect
+       still lands on the moments it was written for and costs nothing during
+       the other 95% of the fight. */
     const split = Math.max(G.trauma, G.chroma);
-    if (TH.dim && split > .25) {
-      ctx.globalAlpha = .24 * split;
-      ctx.drawImage(bloomC, -8 * split, 0, W, H);
-      ctx.drawImage(bloomC, 8 * split, 0, W, H);
+    if (TH.dim && split > SPLIT_MIN && G.quality > .85) {
+      ctx.globalAlpha = .3 * split;
+      ctx.drawImage(bloomC, -9 * split, 0, W, H);
     }
     ctx.restore();
   }
