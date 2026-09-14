@@ -21,7 +21,62 @@ function standOff(e, t, want, dte, strafe) {
   nearEdgeClamp(e, 34);
 }
 
+/* ---- the barrier drone -------------------------------------------------
+   One behaviour, four skins (see ARENA_DRONE in 02b-arena-curve.js). It
+   replaced the static room geometry the main arenas used to be built out
+   of, so what it has to do is be COVER rather than be a threat: it keeps a
+   stand-off, it telegraphs, it plants a wall, and then it goes quiet until
+   the wall expires.
+
+   Its own attacks are deliberately weak and slow. The interesting decision
+   it creates is "do I spend time killing this to open the room back up, or
+   do I fight around what it built" — and that decision evaporates if the
+   drone is also dangerous enough to have to kill anyway. */
+const DRONE_STANDOFF = 330;
+function barrierDroneAI(e, dte, dtr, t, ang) {
+  /* holding a wall up: sit back, keep out of the way, fire occasionally */
+  if (e.barrier) {
+    standOff(e, t, DRONE_STANDOFF + 80, dte, .75);
+    e.timer -= dtr;
+    if (e.timer <= 0) {
+      e.timer = rnd(2.6, 1.7);
+      enemyShoot(e, ang, 330, e.dmg * .7, 5);
+    }
+    return;
+  }
+  e.timer -= dtr;
+  if (e.state === 1) {
+    /* wind-up: it has committed to a spot and is drawing it on the floor */
+    if (e.timer <= 0) {
+      e.state = 0;
+      e.timer = rnd(BARRIER_CD_MAX, BARRIER_CD_MIN);
+      if (e.spot) addBarrier(e, e.spot);
+      e.spot = null;
+    }
+    return;
+  }
+  standOff(e, t, DRONE_STANDOFF, dte, .6);
+  if (e.timer <= 0) {
+    const spot = barrierSpot(e);
+    if (!spot) { e.timer = .8; return; }
+    e.spot = spot;
+    e.state = 1;
+    e.timer = BARRIER_WARN;
+    /* the same telegraph system every warned hazard in the game uses, so a
+       player already knows how to read it */
+    trace({ x: spot.x, y: spot.y, ang: spot.a, len: BARRIER_LEN, wide: BARRIER_T,
+      warn: BARRIER_WARN, live: .06, fade: .3, col: ecol(EN[e.type].col) });
+    Audio_.lock ? Audio_.lock(.8) : Audio_.ui();
+  }
+}
+
 const TLAI = {
+  /* the four drone skins, all the same behaviour */
+  pylon: barrierDroneAI,
+  pane: barrierDroneAI,
+  shimmer: barrierDroneAI,
+  bulkhead: barrierDroneAI,
+
 
   /* ================= GLASSFALL ======================================= */
 
@@ -127,7 +182,7 @@ const TLAI = {
     e.orb = (e.orb || 0) + dte * .18;
     e.x = approach(e.x, cx + Math.cos(e.orb) * 150, 1.2, dte);
     e.y = approach(e.y, cy + Math.sin(e.orb) * 90, 1.2, dte);
-    e.timer -= dte;
+    e.timer -= dte * ENEMY_RATE_BUFF;
     if (e.timer <= 0) {
       const roll = rint(0, e.phase >= 2 ? 3 : 2);
       if (roll === 0) {
@@ -296,7 +351,7 @@ const TLAI = {
     const pull = (60 + e.phase * 55) * clamp(600 / d, .3, 2.2);
     p.vx += Math.cos(pa) * pull * dte;
     p.vy += Math.sin(pa) * pull * dte;
-    e.timer -= dte;
+    e.timer -= dte * ENEMY_RATE_BUFF;
     if (e.timer <= 0) {
       const roll = rint(0, e.phase >= 2 ? 3 : 2);
       if (roll === 0) {
@@ -465,7 +520,7 @@ const TLAI = {
     e.orb = (e.orb || 0) + dte * .12;
     e.x = approach(e.x, W / 2 + Math.cos(e.orb) * 130, 1, dte);
     e.y = approach(e.y, H / 2 + Math.sin(e.orb) * 80, 1, dte);
-    e.timer -= dte;
+    e.timer -= dte * ENEMY_RATE_BUFF;
     if (e.timer <= 0) {
       const roll = rint(0, e.phase >= 2 ? 3 : 2);
       if (roll === 0) {
@@ -656,7 +711,7 @@ const TLAI = {
       } else banner("OMEGA-00", "phase " + (e.phase + 1));
     }
     e.spin = (e.spin || 0) + dte * (.8 + e.phase * .4);
-    e.timer -= dte;
+    e.timer -= dte * ENEMY_RATE_BUFF;
     /* it flies like a pilot: burst of speed, reposition, hold a line */
     const d = dist(e, t) || 1;
     const want = e.phase >= 2 ? 200 : 280;

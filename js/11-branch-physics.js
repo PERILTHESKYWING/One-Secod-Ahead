@@ -156,7 +156,12 @@ function glassDrop(gl, i) {
 function glassField(dt) {
   if (!G.glass || G.glass.sig !== arenaSig) G.glass = glassBuild();
   const gl = G.glass;
-  gl.evT -= dt;
+  /* staged: the Learn tier turns the falling floor on a level AFTER it
+     introduces the room, and the Master tier runs it faster or slower than
+     standard depending on what the level is asking. `floorRate` scales the
+     gap between shatter events, so below 1 is faster. */
+  if (!stageOf("floor")) return;
+  gl.evT -= dt / Math.max(.2, stageOf("floorRate"));
   if (gl.evT <= 0) { glassCrack(gl); gl.gap = Math.max(GLASS_EVERY_MIN, gl.gap * GLASS_ACCEL); gl.evT = gl.gap; }
   for (let i = 0; i < gl.pane.length; i++) {
     const q = gl.pane[i];
@@ -539,7 +544,10 @@ const TOLL_LINE = ["the hour turns", "it is later than it was", "the hand is not
   "three hands now", "there is no more clock to run out"];
 
 function termTier() { return Math.min(G.hour || 0, TERM_TIERS); }
-function termHandCount() { return 1 + Math.min(2, Math.floor((G.hour || 0) / 2)); }
+function termHandCount() {
+  const cap = typeof stageOf === "function" ? stageOf("hands") : 3;
+  return Math.max(1, Math.min(cap, 1 + Math.min(2, Math.floor((G.hour || 0) / 2))));
+}
 function termHandSpeed() { return 1 + termTier() * TERM_SPEED_PER_TIER; }
 function termHandAngles() {
   const n = termHandCount(), out = [];
@@ -570,12 +578,28 @@ function terminusToll() {
 function terminusClock(dt) {
   const p = G.player;
   if (G.hour == null) { G.hour = 0; G.handA = -Math.PI / 2; G.hourT = TERM_HOUR; }
+  /* staged: the Learn tier introduces the dial before it turns, then one
+     hand, then the toll that makes it get permanently worse */
+  if (!stageOf("clock")) return;
   const step = dt * (TAU / TERM_HOUR) * termHandSpeed();
   G.handA += step;
   G.hourT -= dt * termHandSpeed();
   /* twelve: the hand has come back round to the top */
-  if (G.handA >= Math.PI * 1.5) { G.handA -= TAU; G.hourT = TERM_HOUR; terminusToll(); }
-  /* the sweep is a hazard, for everything in the room */
+  if (G.handA >= Math.PI * 1.5) {
+    G.handA -= TAU; G.hourT = TERM_HOUR;
+    if (stageOf("toll")) terminusToll();
+  }
+  /* ---- the sweep is a hazard, FOR THE PLAYER ---------------------------
+     This used to damage enemies too, and it was the last level hazard in
+     the game that did. It has to go for the same reason the Emberwake
+     corona sweep's did: a room that fights on your behalf turns every
+     hazard into a tool, and a hazard you can herd bodies into is not a
+     hazard, it is a weapon you did not have to earn. Level hazards are the
+     player's problem now, everywhere, without exception.
+
+     (TERM_HAND_ENEMY_DMG is deliberately left defined and unused rather
+     than deleted — it is the one number to put back if this ever wants to
+     return behind a per-level flag.) */
   const R = Math.max(W, H);
   for (const a of termHandAngles()) {
     const ex = W / 2 + Math.cos(a) * R, ey = H / 2 + Math.sin(a) * R;
@@ -583,11 +607,6 @@ function terminusClock(dt) {
       /* the room's own hazard: it hurts where you stand and never moves you */
       hurtPlayer(TERM_HAND_DMG * dt, null);
       if (chance(dt * 26)) part(p.x, p.y, { col: ecol(EN.coda.col), s: 40, life: .3, size: 2 });
-    }
-    for (const e of G.enemies) {
-      if (e.dead || BOSSES[e.type]) continue;
-      if (segDist(e.x, e.y, W / 2, H / 2, ex, ey) < TERM_HAND_W + e.r)
-        damageEnemy(e, TERM_HAND_ENEMY_DMG * dt, { spark: chance(.05) });
     }
   }
 }
@@ -925,13 +944,13 @@ function arenaLayout() {
   if (arenaSig === sig) return arenaCache;
   const nom = arenaNominal();
   const fns = LAYOUTS[BRANCHFN.id];
-  const fn = fns && fns[G.levelIdx % fns.length];
+  const fn = fns && fns[BRANCHFN.id === "terminus" ? terminusRoomFor(G.levelIdx) : G.levelIdx % fns.length];
   const built = fn ? fn(nom) : { boxes: [], gates: [] };
   arenaCache = { boxes: built.boxes || [], gates: built.gates || [], nom, name: built.name || "" };
   arenaSig = sig;
   return arenaCache;
 }
-function arenaBoxes() { return arenaLayout().boxes; }
+function arenaBoxes() { return typeof barrierBoxes === "function" ? barrierBoxes() : arenaLayout().boxes; }
 /* the chokepoints of the current layout, as points. Used by the Glassfall
    floor to refuse to shatter a doorway out from under you. */
 function arenaGates() { return arenaLayout().gates; }
@@ -1107,147 +1126,28 @@ function arenaSpawn(side, shell) {
                 across the whole room; cover in a boss room lives in the
                 outer band so the fight still has lines through it. */
 const LAYOUTS = {
-  /* ---- GLASSFALL: standing glass. Vertical, brittle, tall sightlines. -- */
-  glassfall: [
-    /* 1 · Fracture Line — two curtain walls with their doors at opposite
-       ends, so crossing the hall means walking its whole length twice. */
-    function (f) {
-      const x1 = lerp(f.x0, f.x1, .34), x2 = lerp(f.x0, f.x1, .66), door = CHOKE_MID;
-      return { name: "curtains", boxes: [
-        vbar(x1, f.y0, f.y1 - door, WALL_T),
-        vbar(x2, f.y0 + door, f.y1, WALL_T),
-        /* two loose shards so neither open bay is a clean shooting gallery */
-        abox(lerp(f.x0, f.x1, .16), lerp(f.y0, f.y1, .70), 104, WALL_T, { a: -.62 }),
-        abox(lerp(f.x0, f.x1, .84), lerp(f.y0, f.y1, .30), 104, WALL_T, { a: .62 }),
-      ], gates: [{ x: x1, y: f.y1 - door / 2 }, { x: x2, y: f.y0 + door / 2 }] };
-    },
-    /* 2 · The Cut Hall — a glass cell in the middle with ONE door. Best
-       cover in the room and the easiest place to be trapped in. */
-    function (f) {
-      const cw = Math.min(380, (f.x1 - f.x0) * .38), chh = Math.min(260, (f.y1 - f.y0) * .40);
-      const cx = f.cx, cy = f.cy, t = WALL_T_HEAVY;
-      const x0 = cx - cw / 2, x1 = cx + cw / 2, y0 = cy - chh / 2, y1 = cy + chh / 2;
-      return { name: "cell", boxes: [
-        hbar(y0, x0, x1, t), vbar(x0, y0, y1, t), vbar(x1, y0, y1, t),
-        hbar(y1, x0, cx - CHOKE_TIGHT / 2, t), hbar(y1, cx + CHOKE_TIGHT / 2, x1, t),
-        /* diagonals across the outer ring, so the lap around the cell is
-           not one uninterrupted sightline */
-        abox(lerp(f.x0, f.x1, .17), lerp(f.y0, f.y1, .26), 168, WALL_T, { a: .74 }),
-        abox(lerp(f.x0, f.x1, .83), lerp(f.y0, f.y1, .74), 168, WALL_T, { a: .74 }),
-      ], gates: [{ x: cx, y: y1 }] };
-    },
-    /* 3 · Eleven Fifty-Nine — BOSS. Four standing shards in the outer band
-       and nothing in the middle: the orrery needs its stage. */
-    function (f) {
-      const bx = [], R = f.R;
-      for (let i = 0; i < 4; i++) {
-        const a = Math.PI / 4 + i * Math.PI / 2;
-        bx.push(arcbar(f.cx, f.cy, R * .74, a, R * .46, WALL_T, { rad: 12 }));
-      }
-      bx.push(abox(f.cx, f.cy - R * .93, CHOKE_OPEN, WALL_T, {}));
-      bx.push(abox(f.cx, f.cy + R * .93, CHOKE_OPEN, WALL_T, {}));
-      return { name: "shards", boxes: bx, gates: [
-        { x: f.cx + Math.cos(0) * R * .74, y: f.cy },
-        { x: f.cx, y: f.cy - R * .74 },
-      ] };
-    },
-  ],
+  /* ---- The main arenas are EMPTY now -----------------------------------
+     Chamber 09, Glassfall, Emberwake and Nulltide used to author a room
+     shape per level here: solid boxes cut out of the floor that were the
+     cover, the broken sightlines and the chokepoints. They are open floor
+     now, and the cover walks in with the wave instead — see the barrier
+     drone below, which projects a standing wall that lasts until you kill
+     the thing holding it up.
 
-  /* ---- EMBERWAKE: a round forge floor. Radial, industrial, hot. ------- */
-  emberwake: [
-    /* 1 · The Long Noon — three vent stacks on 120°, so the floor is three
-       sectors. Two ways between them: through the hub the corona sweeps, or
-       a tight lane around the rim. That is the decision. */
-    function (f) {
-      const bx = [], gates = [];
-      for (let i = 0; i < 3; i++) {
-        const a = -Math.PI / 2 + i * TAU / 3;
-        const rIn = f.R * .30, rOut = f.R * .72, mid = (rIn + rOut) / 2;
-        bx.push(abox(f.cx + Math.cos(a) * mid, f.cy + Math.sin(a) * mid, rOut - rIn, WALL_T_HEAVY, { a, rad: 11 }));
-        gates.push({ x: f.cx + Math.cos(a) * (f.R * .88), y: f.cy + Math.sin(a) * (f.R * .88) });
-      }
-      return { name: "stacks", boxes: bx, gates };
-    },
-    /* 2 · Vent Row — a corridor straight across the middle with its two
-       mouths staggered, so running the row is committing to it. */
-    function (f) {
-      const gap = CHOKE_OPEN, len = f.R * 1.30, t = WALL_T_HEAVY;
-      return { name: "row", boxes: [
-        abox(f.cx, f.cy - gap / 2, len, t, {}),
-        abox(f.cx, f.cy + gap / 2, len, t, {}),
-        /* the staggered caps: each mouth is half shut, from opposite sides */
-        abox(f.cx - len / 2, f.cy - gap * .18, t, gap * .64, {}),
-        abox(f.cx + len / 2, f.cy + gap * .18, t, gap * .64, {}),
-        /* and one slab out in the open floor either side of the row */
-        abox(f.cx - f.R * .40, f.cy - f.R * .44, 128, WALL_T, { a: .5 }),
-        abox(f.cx + f.R * .40, f.cy + f.R * .44, 128, WALL_T, { a: .5 }),
-      ], gates: [
-        { x: f.cx - len / 2, y: f.cy + gap * .3 },
-        { x: f.cx + len / 2, y: f.cy - gap * .3 },
-      ] };
-    },
-    /* 3 · Closest Approach — BOSS. Four tangent satellites and two rim
-       arcs; the engine keeps the middle. */
-    function (f) {
-      const bx = [];
-      for (let i = 0; i < 4; i++) {
-        const a = Math.PI / 4 + i * Math.PI / 2;
-        bx.push(arcbar(f.cx, f.cy, f.R * .58, a, f.R * .50, WALL_T_HEAVY, { rad: 13 }));
-      }
-      bx.push(arcbar(f.cx, f.cy, f.R * .74, 0, f.R * .60, WALL_T, {}));
-      bx.push(arcbar(f.cx, f.cy, f.R * .74, Math.PI, f.R * .60, WALL_T, {}));
-      return { name: "satellites", boxes: bx, gates: [
-        { x: f.cx, y: f.cy - f.R * .58 }, { x: f.cx, y: f.cy + f.R * .58 },
-      ] };
-    },
-  ],
+     The trade, stated plainly: a permanent architectural chokepoint is
+     replaced by a temporary, enemy-controlled one. You get the same
+     tactical job (something to fight around, a sightline you have to solve)
+     and one thing the geometry could never offer — the player can remove it
+     by choosing to prioritise the drone.
 
-  /* ---- NULLTIDE: submerged structure. Horizontal, layered, heavy. ----- */
-  nulltide: [
-    /* 1 · The Shelf — three staggered breakwaters. No straight line exists
-       from one end of the room to the other. */
-    function (f) {
-      const w = f.x1 - f.x0, h = f.y1 - f.y0, t = WALL_T_HEAVY;
-      const y1 = f.y0 + h * .30, y2 = f.cy, y3 = f.y0 + h * .70;
-      return { name: "breakwaters", boxes: [
-        hbar(y1, f.x0, f.x0 + w * .62, t),
-        hbar(y2, f.x1 - w * .62, f.x1, t),
-        hbar(y3, f.x0, f.x0 + w * .62, t),
-      ], gates: [
-        { x: f.x0 + w * .80, y: y1 }, { x: f.x0 + w * .20, y: y2 }, { x: f.x0 + w * .80, y: y3 },
-      ] };
-    },
-    /* 2 · Pressure Deck — a pillar field. Cover everywhere and none of it
-       complete: every pillar leaves slivers of sightline past it. */
-    function (f) {
-      const bx = [], w = f.x1 - f.x0, h = f.y1 - f.y0, s = 62;
-      for (let r = 0; r < 2; r++) for (let c = 0; c < 3; c++) {
-        bx.push(abox(f.x0 + w * (.26 + c * .24), f.y0 + h * (.32 + r * .36), s, s, { rad: 14 }));
-      }
-      /* one long wall down the near side, so the field has a back to it.
-         Held clear of TIDE_INSET_MAX: it runs parallel to the rim that
-         closes, and a wall the rim can shut onto is a wall you get stuck in. */
-      bx.push(vbar(f.x0 + Math.max(w * .085, TIDE_INSET_MAX + 58),
-        f.y0 + h * .18, f.y1 - h * .18, WALL_T_HEAVY));
-      return { name: "pillars", boxes: bx, gates: [
-        { x: f.x0 + w * .38, y: f.cy }, { x: f.x0 + w * .62, y: f.cy },
-      ] };
-    },
-    /* 3 · The Stacks — BOSS. Four shelves with aisles between them, capped
-       at alternating ends, all of it clear of the middle third. */
-    function (f) {
-      const bx = [], w = f.x1 - f.x0, h = f.y1 - f.y0, t = WALL_T;
-      const xs = [.13, .26, .74, .87];
-      xs.forEach(function (fx, i) {
-        const x = f.x0 + w * fx;
-        const capTop = i % 2 === 0;
-        bx.push(vbar(x, capTop ? f.y0 + h * .06 : f.y0 + h * .30, capTop ? f.y0 + h * .70 : f.y1 - h * .06, t));
-      });
-      return { name: "shelves", boxes: bx, gates: [
-        { x: f.x0 + w * .195, y: f.y1 - h * .12 }, { x: f.x0 + w * .805, y: f.y0 + h * .12 },
-      ] };
-    },
-  ],
+     The primitives above (abox/vbar/hbar/arcbar, the choke widths, the
+     FLOOR_MIN/WALL_MAX_R contract) are all still live: the barrier drone
+     builds its walls out of them, and Terminus still authors rooms with
+     them. Nothing here was deleted for being unused.
+
+     TERMINUS KEEPS ITS ROOMS. Its geometry is the clock — the spindle, the
+     dial, the triangle all read off the centre the hands sweep from — and
+     it is the one arena with no barrier drone in its roster.
 
   /* ---- TERMINUS: the clock. Everything reads off the centre. ---------- */
   terminus: [
@@ -1295,6 +1195,176 @@ const LAYOUTS = {
     },
   ],
 };
+/* Terminus indexes its three rooms by TIER rather than by level, now that
+   it has fifteen levels and three rooms: the spindle carries Learn and
+   Build, the dial carries Master, and the triangle is the boss's stage. */
+function terminusRoomFor(idx) { return idx < 9 ? 0 : idx < 14 ? 1 : 2; }
+
+/* ---- the barrier drone's projected walls -------------------------------
+   What replaced the static room shapes. A drone winds up, then stands a
+   wall segment on the floor; the wall is a full solid — it blocks movement
+   for the player AND for other enemies, it breaks line of sight, and shots
+   from either side die on it — and it stands until the drone dies or its
+   own timer runs out.
+
+   Two rules make it fair rather than annoying:
+     · KILLING THE DRONE TAKES THE WALL WITH IT. That is the whole reason
+       this is better than geometry: the obstacle has a health bar.
+     · IT IS NEVER PLACED ON TOP OF YOU. The wind-up telegraphs where it is
+       going (a trace, the same system every warned hazard in the game uses)
+       and the placement refuses any spot that would materialise inside the
+       player, so you can never be shoved into a wall that was not there.
+
+   The boxes go into the same arenaBoxes() list the authored geometry used,
+   so every existing query — arenaBlocked, arenaRay, arenaSolidAt,
+   resolveSolids, slideAlongWall — handles them with no new code at all. */
+const BARRIER_LIFE = 11;      /* seconds a projected wall stands */
+const BARRIER_WARN = .85;     /* wind-up before it materialises */
+const BARRIER_LEN = 190;      /* wall length, px */
+const BARRIER_T = WALL_T_HEAVY;
+const BARRIER_RANGE = 210;    /* how far from the drone it plants */
+const BARRIER_CD_MIN = 7.5;   /* gap between projections */
+const BARRIER_CD_MAX = 11;
+const BARRIER_MAX = 3;        /* walls one room may hold at once */
+
+/* arenaBoxes() is asked several times per body per frame, so the combined
+   list is rebuilt only when the barriers or the layout actually change
+   rather than being concatenated fresh on every call. */
+let boxesAllVer = -1, boxesAllSig = "", boxesAll = [];
+function barrierBoxes() {
+  const L = arenaLayout();
+  const n = G.barriers ? G.barriers.length : 0;
+  if (!n) return L.boxes;
+  if (boxesAllVer !== G.barrierVer || boxesAllSig !== arenaSig) {
+    boxesAll = L.boxes.slice();
+    for (const b of G.barriers) boxesAll.push(b.box);
+    boxesAllVer = G.barrierVer; boxesAllSig = arenaSig;
+  }
+  return boxesAll;
+}
+function barriersChanged() { G.barrierVer = (G.barrierVer || 0) + 1; }
+
+/* where a drone would like to put one: across the line between it and the
+   player, far enough off the player to be cover rather than a cage */
+function barrierSpot(e) {
+  const p = G.player;
+  const a = Math.atan2(p.y - e.y, p.x - e.x);
+  for (let tries = 0; tries < 8; tries++) {
+    const d = BARRIER_RANGE * rnd(1.15, .55);
+    const wob = rnd(.5, -.5);
+    const x = e.x + Math.cos(a + wob) * d, y = e.y + Math.sin(a + wob) * d;
+    /* never materialise on the player, and never inside existing geometry */
+    if (Math.hypot(x - p.x, y - p.y) < BARRIER_LEN * .6 + p.r + 30) continue;
+    if (arenaSolidAt(x, y, BARRIER_T)) continue;
+    return { x, y, a: a + Math.PI / 2 + wob };
+  }
+  return null;
+}
+function addBarrier(e, spot) {
+  G.barriers = G.barriers || [];
+  if (G.barriers.length >= BARRIER_MAX) removeBarrier(G.barriers[0]);
+  const box = abox(spot.x, spot.y, BARRIER_LEN, BARRIER_T, { a: spot.a, rad: 10, los: 1, solid: 1 });
+  const b = { box, owner: e, life: BARRIER_LIFE, max: BARRIER_LIFE, born: 0,
+    col: ecol(EN[e.type].col), type: e.type };
+  G.barriers.push(b);
+  e.barrier = b;
+  barriersChanged();
+  ring(spot.x, spot.y, b.col, 8, BARRIER_LEN * .7, .4, 3);
+  Audio_.glassLock();
+  return b;
+}
+function removeBarrier(b) {
+  if (!b) return;
+  const i = G.barriers ? G.barriers.indexOf(b) : -1;
+  if (i < 0) return;
+  G.barriers.splice(i, 1);
+  if (b.owner) b.owner.barrier = null;
+  barriersChanged();
+  burst(b.box.cx, b.box.cy, 18, b.col, 1.3, { sq: 1, spin: rnd(-8, 8) });
+  ring(b.box.cx, b.box.cy, b.col, BARRIER_LEN * .4, 8, .34, 2.4);
+}
+function barrierTick(dt) {
+  if (!G.barriers || !G.barriers.length) return;
+  for (let i = G.barriers.length - 1; i >= 0; i--) {
+    const b = G.barriers[i];
+    b.born += dt;
+    b.life -= dt;
+    /* the wall is held up by the drone: kill it and the wall goes with it */
+    if (b.life <= 0 || !b.owner || b.owner.dead || G.enemies.indexOf(b.owner) < 0) {
+      removeBarrier(b);
+      continue;
+    }
+  }
+}
+/* Drawn with the walls, between the enemies and the player, so a body
+   standing behind one is actually hidden by it. Each arena's skin is a
+   different fill over the same slab: a hard-light panel, a glass sheet, a
+   heat curtain, a wall of water. */
+function drawBarriers() {
+  if (!G.barriers || !G.barriers.length) return;
+  ctx.save();
+  for (const b of G.barriers) {
+    const box = b.box;
+    /* it rises into place over its first fifth of a second and blinks out
+       over its last second, so neither end is a pop */
+    const inA = clamp(b.born / .2, 0, 1);
+    const outA = b.life < 1 ? clamp(b.life, 0, 1) : 1;
+    const a = inA * outA;
+    const fade = b.life < 2.2 && Math.floor(b.life * 6) % 2 === 0 ? .55 : 1;
+    ctx.save();
+    ctx.translate(box.cx, box.cy); ctx.rotate(box.a);
+    ctx.scale(1, inA);
+    const hw = box.w / 2, hh = box.h / 2, rad = Math.min(box.rad, hw, hh);
+    const g = ctx.createLinearGradient(0, -hh, 0, hh);
+    if (b.type === "shimmer") {
+      /* heat haze: bright at the edges, thin in the middle, always moving */
+      g.addColorStop(0, "rgba(" + b.col + "," + .58 * a * fade + ")");
+      g.addColorStop(.5, "rgba(" + b.col + "," + .16 * a * fade + ")");
+      g.addColorStop(1, "rgba(" + b.col + "," + .58 * a * fade + ")");
+    } else if (b.type === "bulkhead") {
+      /* pressurised water: dark and heavy at the base, lit at the top */
+      g.addColorStop(0, "rgba(" + b.col + "," + .52 * a * fade + ")");
+      g.addColorStop(.55, "rgba(4,26,40," + .82 * a + ")");
+      g.addColorStop(1, "rgba(2,14,24," + .9 * a + ")");
+    } else if (b.type === "pane") {
+      /* standing glass: mostly transparent, hard bright edges */
+      g.addColorStop(0, "rgba(" + b.col + "," + .5 * a * fade + ")");
+      g.addColorStop(.45, "rgba(" + b.col + "," + .1 * a + ")");
+      g.addColorStop(1, "rgba(" + b.col + "," + .3 * a + ")");
+    } else {
+      /* hard light: the Chamber 09 baseline — a flat lit panel */
+      g.addColorStop(0, "rgba(" + b.col + "," + .46 * a * fade + ")");
+      g.addColorStop(.5, "rgba(0,0,0," + .7 * a + ")");
+      g.addColorStop(1, "rgba(0,0,0," + .82 * a + ")");
+    }
+    ctx.fillStyle = g;
+    rrect(-hw, -hh, box.w, box.h, rad); ctx.fill();
+    ctx.strokeStyle = "rgba(" + b.col + "," + .85 * a * fade + ")";
+    ctx.lineWidth = 1.8;
+    rrect(-hw, -hh, box.w, box.h, rad); ctx.stroke();
+    /* the scanline that says this is projected rather than built */
+    ctx.globalAlpha = a * .3;
+    ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineWidth = 1;
+    for (let y = -hh + 3; y < hh; y += 5) {
+      ctx.beginPath();
+      ctx.moveTo(-hw + rad, y + ((G.time * 22) % 5)); ctx.lineTo(hw - rad, y + ((G.time * 22) % 5));
+      ctx.stroke();
+    }
+    ctx.restore();
+    /* the tether back to the drone holding it up — the readable answer to
+       "how do I get rid of this" */
+    if (b.owner && !b.owner.dead) {
+      ctx.globalAlpha = a * .32;
+      ctx.strokeStyle = "rgb(" + b.col + ")";
+      ctx.lineWidth = 1.4;
+      ctx.setLineDash([7, 9]); ctx.lineDashOffset = -G.time * 46;
+      ctx.beginPath(); ctx.moveTo(b.owner.x, b.owner.y); ctx.lineTo(box.cx, box.cy); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
 
 /* ---- drawing the room ------------------------------------------------
    The floor line goes down in paint() (under everything) and the wall
@@ -1360,10 +1430,12 @@ const BRANCH = {
       /* the floor, first: it is the branch's headline now */
       glassField(dt);
       /* discs bloom on their own schedule */
-      G.stasisT = (G.stasisT || 4) - dt;
-      if (G.stasisT <= 0) {
-        G.stasisT = rnd(9, 5);
-        addStasis(rnd(W - 160, 160), rnd(H - 160, 160), rnd(150, 100), rnd(11, 7));
+      if (stageOf("discs")) {
+        G.stasisT = (G.stasisT || 4) - dt * stageOf("discRate");
+        if (G.stasisT <= 0) {
+          G.stasisT = rnd(9, 5);
+          addStasis(rnd(W - 160, 160), rnd(H - 160, 160), rnd(150, 100), rnd(11, 7));
+        }
       }
       for (let i = G.stasis.length - 1; i >= 0; i--) {
         const s = G.stasis[i]; s.life -= dt; s.born += dt;
@@ -1504,30 +1576,39 @@ const BRANCH = {
   emberwake: {
     field(dt) {
       const p = G.player;
-      /* heat decays slowly on its own; the dash vents it */
-      G.heat = clamp(G.heat - dt * .28, 0, 1.2);
-      if (G.jam > 0) { G.jam -= dt; if (G.jam <= 0) { G.heat = 0; Audio_.vent(); } }
-      /* the room breathing, and the floor spitting */
-      heatwaveField(dt);
-      spurtField(dt);
-      spurtTick(dt);
-      /* corona sweep — a slow wedge out of the room centre */
-      G.coronaAng += dt * .42;
-      const cx = W / 2, cy = H / 2;
-      const a = Math.atan2(p.y - cy, p.x - cx);
-      let d = Math.abs(angDiff(a, G.coronaAng));
-      /* the sweep is light, so a wall between you and the middle stops it —
-         the vent stacks are the only shade in the branch */
-      if (d < .2 && !arenaBlocked(cx, cy, p.x, p.y)) {
-        hurtPlayer(20 * dt, null);
-        G.heat = clamp(G.heat + dt * .5, 0, 1.2);
+      /* Staged, one part at a time through the Learn tier: the gauge first,
+         then the outward push, then the full breath. `heatDecay` below 1
+         makes the gauge bleed off slower, which is what turns dash-venting
+         from a convenience into a resource decision (see Helion's Choice). */
+      if (!stageOf("heat")) { G.heat = 0; G.jam = 0; }
+      else {
+        /* heat decays slowly on its own; the dash vents it */
+        G.heat = clamp(G.heat - dt * .28 * stageOf("heatDecay"), 0, 1.2);
+        if (G.jam > 0) { G.jam -= dt; if (G.jam <= 0) { G.heat = 0; Audio_.vent(); } }
       }
-      /* the sweep also lights enemies it crosses, which is usually useful */
-      for (const e of G.enemies) {
-        if (e.dead || e.type === "perihelion") continue;
-        const ea = Math.atan2(e.y - cy, e.x - cx);
-        if (Math.abs(angDiff(ea, G.coronaAng)) < .16 && !arenaBlocked(cx, cy, e.x, e.y))
-          damageEnemy(e, 26 * dt, { spark: chance(.06) });
+      /* the room breathing, and the floor spitting */
+      if (stageOf("wave")) heatwaveField(dt);
+      if (stageOf("spurts")) { spurtField(dt); spurtTick(dt); }
+      /* corona sweep — a slow wedge out of the room centre */
+      if (stageOf("corona")) {
+        G.coronaAng += dt * .42;
+        const cx = W / 2, cy = H / 2;
+        const a = Math.atan2(p.y - cy, p.x - cx);
+        const d = Math.abs(angDiff(a, G.coronaAng));
+        /* the sweep is light, so cover between you and the middle stops it */
+        if (d < .2 && !arenaBlocked(cx, cy, p.x, p.y)) {
+          hurtPlayer(20 * dt, null);
+          G.heat = clamp(G.heat + dt * .5, 0, 1.2);
+        }
+        /* ENEMIES ARE IMMUNE TO THE ROOM. The sweep used to light up any
+           body it crossed, which read as the level fighting on your side —
+           a hazard you could herd things into, and one that quietly did a
+           chunk of the damage the player was supposed to be doing. A level
+           hazard is the player's problem now and nobody else's. The same
+           call was removed from the Terminus clock hand for the same
+           reason; see terminusClock(). (A kill CHAINING into other bodies
+           is a different thing and stays — Glassfall's stasis shatter is
+           caused by the player killing something, not by the room.) */
       }
       if (G.safeWedge) {
         G.safeWedge.life -= dt;
@@ -1644,9 +1725,12 @@ const BRANCH = {
   nulltide: {
     field(dt) {
       const p = G.player;
-      /* the current: a slow rotating push on everything loose */
+      /* the current: a slow rotating push on everything loose. Staged —
+         the Learn tier runs it at half strength before the rewind exists at
+         all, and two Master levels lean on it hard (see The Focal Plane). */
+      const cst = stageOf("current") ? stageOf("currentStr") : 0;
       G.current += dt * .12;
-      const cx = Math.cos(G.current) * 42, cy = Math.sin(G.current) * 42;
+      const cx = Math.cos(G.current) * 42 * cst, cy = Math.sin(G.current) * 42 * cst;
       p.vx += cx * dt; p.vy += cy * dt;
       for (const e of G.enemies) { if (e.type !== TL.boss) { e.x += cx * dt * .5; e.y += cy * dt * .5; } }
       for (const h of G.hostiles) { h.vx += cx * dt * .7; h.vy += cy * dt * .7; }
@@ -1668,10 +1752,13 @@ const BRANCH = {
         G.snap.push({ e: rec });
         if (G.snap.length > 10) G.snap.shift();
       }
-      /* the tide itself */
-      G.tideT -= dt;
-      if (G.tideT <= 1.2 && G.tideWarn === 0) { G.tideWarn = 1; Audio_.tideWarn(); banner("Undertow", "the tide is turning"); }
-      if (G.tideT <= 0) { G.tideT = 15; G.tideWarn = 0; tideRewind(false); }
+      /* the tide itself. `rewindEvery` below 1 means it comes round more
+         often, which is what several Master levels turn up. */
+      if (stageOf("rewind")) {
+        G.tideT -= dt / Math.max(.2, stageOf("rewindEvery"));
+        if (G.tideT <= 1.2 && G.tideWarn === 0) { G.tideWarn = 1; Audio_.tideWarn(); banner("Undertow", "the tide is turning"); }
+        if (G.tideT <= 0) { G.tideT = 15; G.tideWarn = 0; tideRewind(false); }
+      }
       /* depth charges */
       for (let i = G.charges.length - 1; i >= 0; i--) {
         const ch = G.charges[i];
@@ -1793,11 +1880,11 @@ const BRANCH = {
       const p = G.player;
       /* the clock the arena is, and the thing it keeps a copy of */
       terminusClock(dt);
-      behindField(dt);
+      if (stageOf("behind")) behindField(dt);
       /* the entropy clock drains faster with every toll — the escalation is
          not only new hazards, it is less time to deal with them in */
-      G.entropy -= dt * (1 + termTier() * TERM_DRAIN_PER_TIER);
-      if (G.entropy <= 0) {
+      if (stageOf("entropy")) G.entropy -= dt * (1 + termTier() * TERM_DRAIN_PER_TIER);
+      if (stageOf("entropy") && G.entropy <= 0) {
         G.entropy = 0;
         G.drain += dt;
         hurtPlayer(7 * dt * (1 + termTier() * TERM_DRAIN_PER_TIER), null);

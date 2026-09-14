@@ -842,3 +842,11 @@ function drawSpecialPlate(e) {
   ctx.textAlign = "left";
   ctx.restore();
 }
+
+/* ---- last, because it needs everything ---------------------------------
+   The Trophy Road's arena ladders are brought up to date here rather than
+   in 02c-trophy-road.js: a ladder rung can grant an ability, and ABIL/
+   abilSave() are defined in this file, which loads last. A save migrated
+   from before the road existed arrives with a full arena's worth of
+   baseline trophies and has genuinely earned its first rungs. */
+claimAllLadders();

@@ -139,6 +139,10 @@ function show(name) {
   $("#app").classList.toggle("playing", name === "none" && !G.attract);
 }
 function refreshHome() {
+  /* the Trophy Road's total is the headline progress number now — it is the
+     one figure that goes up permanently and never resets */
+  const rt = $("#recTrophies");
+  if (rt) rt.textContent = SAVE.trophiesTotal ? fmt(SAVE.trophiesTotal) : "—";
   $("#recLevel").textContent = SAVE.bestLevel || "—";
   $("#recWave").textContent = SAVE.bestWave || "—";
   $("#recScore").textContent = SAVE.bestScore ? fmt(SAVE.bestScore) : "—";
@@ -155,11 +159,11 @@ function goHome() {
   show("home");
 }
 let lastMode = "play";
-function startPlay(mode) {
+function startPlay(mode, startAt) {
   lastMode = mode === "survival" ? "survival" : "play";
   Audio_.init(); Audio_.resume();
   $("#draft").classList.remove("on");
-  newRun(lastMode === "survival");
+  newRun(lastMode === "survival", startAt);
   ghostHp = 1;
   show("none");
   Audio_.confirm();
@@ -180,7 +184,9 @@ function typeHook(txt) {
 function showLevelCard(L) {
   G.carding = true; G.cardIn = 6.5;
   const surv = G.survival;
-  $("#lcEyebrow").textContent = surv ? "Chamber 09 · endless" : TL.name + " · " + TL.code + " · " + levelLabel();
+  $("#lcEyebrow").textContent = surv ? "Chamber 09 · endless"
+    : TL.name + " · " + levelLabel() + " · " + TIER_NAME[L.tier || TIER_OF(G.levelIdx)].toLowerCase() +
+      (G.mutation ? " · mutation" : "");
   $("#lcName").textContent = surv ? "Survival" : L.name;
   typeHook(surv
     ? "The purge stopped counting. Waves come until you stop holding them, they get worse every time, and every third one hands you a core."
@@ -199,6 +205,15 @@ function showLevelCard(L) {
     box.appendChild(d);
     drawIcon(cvs, ty, 34);
   });
+  /* the Learn tier's teaching line: which piece of the arena's hazard this
+     level has just switched on, and what to do about it. This is the whole
+     mechanism by which levels 1-4 teach rather than merely being easier, so
+     it goes where the player is already reading. */
+  const tip = $("#lcTip");
+  if (tip) {
+    tip.textContent = surv ? "" : (L.envIntro || "");
+    tip.classList.toggle("on", !surv && !!L.envIntro);
+  }
   $("#lcGo").textContent = "press any key to begin";
   $("#levelCard").classList.add("on");
   Audio_.levelIn();
@@ -217,6 +232,90 @@ function showResults(banked, best) {
     : "Timeline broken in " + curLevel().name;
   show("results");
 }
+/* ---------------- the level results screen -----------------------------
+   The other half of the run-loop change: a story level ends HERE and hands
+   you back to the map, rather than chaining into the next level. It is the
+   only place the player is shown what an attempt was worth, so it has to
+   answer three things at once — what you banked, whether it beat your
+   record, and what the first clear paid out. */
+function showLevelResults(cleared, banked, res) {
+  const L = curLevel(), idx = G.levelIdx, arena = TL.id;
+  const rec = levelRec(arena, idx);
+  $("#lrEyebrow").textContent = TL.name + " · level " + (idx + 1) + " · " +
+    TIER_NAME[L.tier || TIER_OF(idx)].toLowerCase();
+  $("#lrTitle").textContent = cleared
+    ? (res && res.firstClear ? L.name + " — first clear" : L.name + " cleared")
+    : "Broken on wave " + G.wave + " of " + L.waves;
+  $("#lrTitle").className = "lr-title" + (cleared ? " good" : " bad");
+
+  $("#lrTrophies").textContent = fmt(res ? res.gained : 0);
+  /* the bonuses, as the multipliers they actually were */
+  const bb = $("#lrBonus");
+  bb.innerHTML = "";
+  if (res && res.bonuses.length) {
+    res.bonuses.forEach((b) => {
+      const el = document.createElement("span");
+      el.className = "bonus";
+      el.textContent = "+" + Math.round(b.pct * 100) + "% " + b.label;
+      bb.appendChild(el);
+    });
+  } else if (cleared) {
+    bb.innerHTML = '<span class="bonus off">no bonuses — try it untouched, under ' +
+      Math.round(L.par || 90) + 's, or with a mutation</span>';
+  } else {
+    bb.innerHTML = '<span class="bonus off">' + Math.round((res ? res.gained : 0) /
+      Math.max(1, levelBaseTrophies(arena, idx)) * 100) + '% of the level — a failed attempt still banks</span>';
+  }
+  /* "best ever" is the number that matters, so it is stated even when this
+     attempt did not move it — banking less than your record is not a loss */
+  const best = $("#lrBest");
+  best.className = "lr-best" + (res && res.improved ? " up" : "");
+  best.innerHTML = res && res.improved
+    ? "<b>New best</b> · " + fmt(res.prev) + " → " + fmt(res.best) +
+      " of a possible " + fmt(levelMaxTrophies(arena, idx))
+    : "Best on this level: <b>" + fmt(rec.trophies) + "</b> of a possible " +
+      fmt(levelMaxTrophies(arena, idx));
+
+  $("#lrKills").textContent = G.kills;
+  $("#lrTime").textContent = fmtClock(G.levelT);
+  $("#lrHits").textContent = G.levelHits;
+  $("#lrShards").textContent = fmt(banked);
+
+  /* first-clear payouts and any ladder rungs crossed, in one list */
+  const rw = $("#lrRewards");
+  rw.innerHTML = "";
+  const blocks = [];
+  if (res && res.paid) blocks.push(res.paid);
+  if (res && res.rungs && res.rungs.length) {
+    const items = [];
+    res.rungs.forEach((r) => {
+      const g = { why: "Arena ladder", items: [] };
+      if (r.shards) g.items.push({ label: fmt(r.shards) + " shards" });
+      if (r.cosmetic) g.items.push({ label: (cosmOf(r.cosmetic) || {}).name || r.cosmetic });
+      if (r.ability) g.items.push({ label: (abilOf(r.ability) || {}).name || r.ability });
+      items.push(g);
+    });
+    items.forEach((g) => blocks.push(g));
+  }
+  blocks.forEach((g) => {
+    if (!g || !g.items || !g.items.length) return;
+    const el = document.createElement("div");
+    el.className = "lr-reward";
+    el.innerHTML = "<i>" + g.why + "</i>" + g.items.map((x) => "<b>" + x.label + "</b>").join("");
+    rw.appendChild(el);
+  });
+
+  /* Next only exists if there is a next and it is open */
+  const hasNext = idx + 1 < LEVELS_PER_ARENA && levelUnlocked(arena, idx + 1);
+  const nb = $("#lrNext");
+  nb.style.display = hasNext ? "" : "none";
+  nb.textContent = hasNext ? "Level " + (idx + 2) : "Next level";
+  nb.onclick = () => { Audio_.confirm(); enterLevel(arena, idx + 1, 0); };
+  $("#lrRetry").textContent = G.mutation ? "Replay · mutation" : "Replay";
+  $("#lrRetry").onclick = () => { Audio_.confirm(); enterLevel(arena, idx, G.mutation); };
+  show("levelResult");
+}
+
 function togglePause(force) {
   if (G.mode !== "play" || G.attract || G.drafting) return;
   const want = force == null ? !G.paused : force;

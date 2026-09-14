@@ -70,20 +70,11 @@ Object.assign(Audio_, {
   cineTitle() { this.cineHit(1); [0, .04].forEach((d) => this.tone({ type: "sawtooth", freq: 55, to: 44, dur: 2.2, gain: .16, delay: d, filter: "lowpass", cutoff: 600 })); this.tone({ type: "triangle", freq: 523, to: 784, dur: 1.6, gain: .07, delay: .1 }); },
 });
 
-/* ---------------- save schema additions -------------------------------- */
-SAVE.tl = SAVE.tl || {};
-SAVE.secrets = SAVE.secrets || {};
-SAVE.lore = SAVE.lore || {};
-SAVE.admin = SAVE.admin || 0;
-TIMELINES.forEach((t) => { SAVE.tl[t.id] = Object.assign({ entered: 0, cleared: 0, best: 0 }, SAVE.tl[t.id] || {}); });
-SAVE.tl.ch09.entered = 1;
-persist();
-
-function tlUnlocked(t) {
-  if (SAVE.admin) return true;
-  if (!t.unlockedBy) return true;
-  return !!(SAVE.tl[t.unlockedBy] && SAVE.tl[t.unlockedBy].cleared);
-}
+/* ---------------- save schema ------------------------------------------
+   SAVE.tl and the per-level Trophy Road records are built and repaired in
+   02c-trophy-road.js, which is the single owner of that schema. This file
+   only reads them. */
+function tlUnlocked(t) { return arenaUnlocked(typeof t === "string" ? t : t.id); }
 function setTimeline(id) {
   TL = tlOf(id);
   LEVELS = TL.levels;
@@ -101,43 +92,261 @@ function setTimeline(id) {
    of every branch reusing Chamber 09's flat rectangle. */
 const BRANCHFN = { id: "ch09", field: null, paint: null, over: null, slowAt: null, dmgAt: null, onKill: null, bounds: null, spawnEdge: null, walls: null };
 
-/* ---------------- timeline select screen -------------------------------- */
+/* ---------------- the space-time map --------------------------------------
+   This was a flat vertical list of five cards. It is the Trophy Road now:
+   every arena is a region with its own identity, and inside each unlocked
+   region its fifteen levels run left to right as a strip of nodes in strict
+   unlock order, seamed where the tiers change — so the shape of the climb is
+   visible rather than being fifteen identical dots.
+
+   Three things this screen has to do that the card list did not:
+
+     BE DISTINCT PER ARENA. Each region is painted out of that arena's own
+     accent and palette — the same numbers its levels and backdrops already
+     use — plus a motif drawn on its header canvas: Glassfall's shatter,
+     Emberwake's heat haze, Nulltide's current lines, Terminus's dial,
+     Chamber 09's baseline grid. Procedural, like everything else here.
+
+     TEASE WHAT IS NEXT. A locked arena is not a blank card. It is fogged,
+     with a sliver of its real accent colour bleeding across the boundary and
+     silhouettes from its actual roster leaking through the haze at low
+     opacity — drawn with the same drawIcon() the bestiary uses, then pushed
+     behind a blur. The theme is visibly THERE without being legible.
+
+     CARRY THE ROAD'S STATE. Each node shows locked / open / cleared, its best
+     trophies against what that level could be worth, and — once it has been
+     cleared — the mutation replay toggle that pays the +25%. */
 let tlSel = 0;
+
+/* which levels currently have the mutation replay armed. Session state on
+   purpose: it is a choice about the next attempt, not a saved setting. */
+const roadMut = {};
+
+/* the per-arena motif, drawn on the canvas behind each region header */
+function roadMotif(cvs, t, open) {
+  const d = Math.min(devicePixelRatio || 1, 2);
+  const w = Math.max(120, cvs.clientWidth || 300), h = Math.max(40, cvs.clientHeight || 66);
+  cvs.width = w * d; cvs.height = h * d;
+  const c = cvs.getContext("2d");
+  c.setTransform(d, 0, 0, d, 0, 0);
+  c.clearRect(0, 0, w, h);
+  const col = t.accent, base = open ? 1 : .4;
+  c.strokeStyle = "rgba(" + col + ",.55)";
+  c.lineWidth = 1.2;
+  if (t.id === "glassfall") {
+    /* shatter: radial cracks off a point below the frame, kinked the way a
+       real fracture is rather than drawn as clean rays */
+    const ox = w * .5, oy = h * 1.2;
+    for (let i = 0; i < 11; i++) {
+      const a = -Math.PI * (.08 + (i / 10) * .84);
+      c.globalAlpha = base * (.16 + (i % 3) * .07);
+      c.beginPath(); c.moveTo(ox, oy);
+      let x = ox, y = oy;
+      for (let k = 0; k < 3; k++) {
+        const aa = a + (k % 2 ? .15 : -.15);
+        x += Math.cos(aa) * h * .55; y += Math.sin(aa) * h * .55;
+        c.lineTo(x, y);
+      }
+      c.stroke();
+    }
+  } else if (t.id === "emberwake") {
+    /* heat haze: stacked ripples, tighter toward the floor */
+    for (let r = 0; r < 6; r++) {
+      c.globalAlpha = base * (.13 + r * .06);
+      c.beginPath();
+      for (let i = 0; i <= 44; i++) {
+        const x = (i / 44) * w;
+        const y = h - r * (h / 7) - Math.sin(i * .36 + r * 1.3) * (2.4 + r * .5);
+        i ? c.lineTo(x, y) : c.moveTo(x, y);
+      }
+      c.stroke();
+    }
+  } else if (t.id === "nulltide") {
+    /* current lines: long horizontal flow, phase-drifting down the frame */
+    for (let r = 0; r < 7; r++) {
+      c.globalAlpha = base * (.11 + (r % 3) * .07);
+      c.beginPath();
+      for (let i = 0; i <= 64; i++) {
+        const x = (i / 64) * w;
+        const y = (r + .5) * (h / 7) + Math.sin(i * .16 + r * .9) * 3.2;
+        i ? c.lineTo(x, y) : c.moveTo(x, y);
+      }
+      c.stroke();
+    }
+  } else if (t.id === "terminus") {
+    /* the dial, rising off the bottom edge: rings and twelve hour marks */
+    const cx = w * .5, cy = h * 1.32, R = h * 1.18;
+    for (let i = 0; i < 3; i++) {
+      c.globalAlpha = base * .2;
+      c.beginPath(); c.arc(cx, cy, R * (.5 + i * .26), Math.PI, 0); c.stroke();
+    }
+    for (let i = 0; i < 12; i++) {
+      const a = Math.PI + (i / 11) * Math.PI;
+      c.globalAlpha = base * (i % 3 === 0 ? .5 : .26);
+      c.beginPath();
+      c.moveTo(cx + Math.cos(a) * R * .78, cy + Math.sin(a) * R * .78);
+      c.lineTo(cx + Math.cos(a) * R * .97, cy + Math.sin(a) * R * .97);
+      c.stroke();
+    }
+  } else {
+    /* Chamber 09: the baseline grid, which is exactly what it is */
+    c.globalAlpha = base * .16;
+    for (let x = 0; x < w; x += 22) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x, h); c.stroke(); }
+    for (let y = 0; y < h; y += 15) { c.beginPath(); c.moveTo(0, y); c.lineTo(w, y); c.stroke(); }
+  }
+  c.globalAlpha = 1;
+}
+
+/* one level node on the strip */
+function roadNode(t, i) {
+  const L = t.levels[i];
+  const rec = levelRec(t.id, i);
+  const open = levelUnlocked(t.id, i);
+  const best = rec.trophies || 0;
+  const cap = levelMaxTrophies(t.id, i);
+  const el = document.createElement("button");
+  el.className = "node" + (open ? "" : " locked") + (rec.cleared ? " done" : "") +
+    (L.boss ? " boss" : "") + (open && !rec.cleared ? " next" : "");
+  /* the ARENA's accent, not the level's. Each level carries its own palette
+     for its backdrop and its music, and using those here made one arena's
+     strip read as fifteen unrelated colours — which is the opposite of the
+     "every arena is visually distinct" this screen exists for. The tier
+     varies weight instead of hue, so the climb still reads as four stages
+     within one identity. */
+  el.style.setProperty("--tc", "rgb(" + t.accent + ")");
+  el.style.setProperty("--tw", (.5 + (L.tier || TIER_OF(i)) * .14).toFixed(2));
+  /* the node's fill bar is how close this level's record is to its ceiling,
+     which is the thing a replay is actually chasing */
+  el.style.setProperty("--frac", (cap ? clamp(best / cap, 0, 1) * 100 : 0).toFixed(1) + "%");
+  let foot;
+  if (!open) foot = '<span class="tro part">clear ' + i + " first</span>";
+  else if (rec.cleared) foot = '<span class="tro"><i></i>' + fmt(best) + " / " + fmt(cap) + "</span>";
+  else if (rec.bestPct > 0) foot = '<span class="tro part">' + Math.round(rec.bestPct * 100) + "% · " + fmt(best) + "</span>";
+  else foot = '<span class="tro part">not cleared</span>';
+  el.innerHTML =
+    '<span class="n">' + (L.boss ? "★" : i + 1) + "</span>" +
+    '<span class="nm">' + (open ? L.name : "—") + "</span>" + foot +
+    (rec.mut ? '<span class="mutflag" title="cleared with a mutation">M</span>' : "");
+  if (!open) {
+    el.onclick = () => { Audio_.deny(); toast("Clear level " + i + " first", "var(--threat)"); };
+    return el;
+  }
+  el.onclick = () => { Audio_.confirm(); enterLevel(t.id, i, roadMut[t.id + ":" + i] ? 1 : 0); };
+  el.addEventListener("mouseenter", () => {
+    Audio_.ui();
+    $("#roadHint").textContent = L.hook ? L.hook.split(".")[0].toLowerCase() : "";
+  });
+  /* the mutation replay toggle — only on a level already cleared once,
+     because that is the whole premise: a level you have outgrown, made
+     dangerous again, for a quarter more trophies */
+  if (rec.cleared) {
+    const mt = document.createElement("i");
+    mt.className = "mut" + (roadMut[t.id + ":" + i] ? " on" : "");
+    mt.title = "Replay with a mutation · +25% trophies";
+    mt.textContent = "+25%";
+    mt.onclick = (ev) => {
+      ev.stopPropagation();
+      const k = t.id + ":" + i;
+      roadMut[k] = !roadMut[k];
+      mt.classList.toggle("on", !!roadMut[k]);
+      Audio_.ui();
+    };
+    el.appendChild(mt);
+  }
+  return el;
+}
+
 function renderTimelines() {
   const box = $("#tlList");
   box.innerHTML = "";
-  TIMELINES.forEach((t, i) => {
+  $("#roadTrophies").textContent = fmt(recomputeTrophies());
+  $("#roadHint").textContent = "";
+  TIMELINES.forEach((t, ti) => {
     const open = tlUnlocked(t);
-    const st = SAVE.tl[t.id];
-    const el = document.createElement("button");
-    el.className = "tlcard" + (open ? "" : " locked") + (i === tlSel ? " sel" : "");
-    el.style.setProperty("--tc", "rgb(" + t.accent + ")");
-    const roster = t.roster.concat([t.boss]);
-    el.innerHTML =
-      '<div class="tlhead"><span class="tlcode">' + t.code + "</span>" +
-      (st.cleared ? '<span class="tlflag">cleared</span>' : open ? "" : '<span class="tlflag lock">locked</span>') + "</div>" +
+    const reg = document.createElement("section");
+    reg.className = "region" + (open ? "" : " sealed");
+    reg.style.setProperty("--tc", "rgb(" + t.accent + ")");
+
+    /* ---- the region header ---- */
+    const head = document.createElement("div");
+    head.className = "rhead";
+    const motif = document.createElement("canvas");
+    motif.className = "rmotif";
+    head.appendChild(motif);
+    const info = document.createElement("div");
+    info.className = "rinfo";
+    const done = arenaClearedCount(t.id);
+    const marks = ladderThresholds(t.id);
+    const rung = ladderTierEarned(t.id);
+    const nextMark = marks[rung];
+    const stat = open
+      ? '<div class="rstat"><span><b>' + done + "</b>/15 cleared</span>" +
+        "<span><b>" + fmt(arenaTrophies(t.id)) + "</b> trophies</span>" +
+        '<span class="ladder">ladder <b>' + rung + "</b>/5 · " +
+        (nextMark ? "next at " + fmt(nextMark) : "complete") + "</span></div>"
+      : '<div class="rstat"><span class="ladder">branch physics unavailable while sealed</span></div>';
+    info.innerHTML =
+      '<span class="tlcode">' + t.code + "</span>" +
       "<h3>" + t.name + "</h3>" +
       "<p>" + (open ? t.blurb : "Sealed. Clear " + tlOf(t.unlockedBy).name + " to bring this branch online.") + "</p>" +
-      '<div class="tlmech"><b>' + t.mech.name + "</b><span>" + (open ? t.mech.desc : "Branch physics unavailable while sealed.") + "</span></div>" +
-      '<div class="tlroster"></div>';
-    box.appendChild(el);
-    const rr = el.querySelector(".tlroster");
-    roster.forEach((ty) => {
-      const cvs = document.createElement("canvas");
-      rr.appendChild(cvs);
-      if (open) drawIcon(cvs, ty, ty === t.boss ? 42 : 30);
-      else { cvs.width = 30; cvs.height = 30; cvs.style.width = "30px"; cvs.style.height = "30px"; cvs.className = "hid"; }
-    });
-    el.onclick = () => {
-      if (!open) { Audio_.deny(); toast("Branch sealed · clear " + tlOf(t.unlockedBy).name + " first", "var(--threat)"); return; }
-      tlSel = i;
-      setTimeline(t.id);
-      Audio_.confirm();
-      startPlay("play");
-    };
-    el.addEventListener("mouseenter", () => { tlSel = i; $$(".tlcard").forEach((x, k) => x.classList.toggle("sel", k === i)); });
+      stat;
+    head.appendChild(info);
+    reg.appendChild(head);
+
+    if (open) {
+      /* ---- the strip of fifteen, seamed at every tier change ---- */
+      const strip = document.createElement("div");
+      strip.className = "strip";
+      for (let i = 0; i < LEVELS_PER_ARENA; i++) {
+        if (TIER_STARTS.indexOf(i) >= 0) {
+          const seam = document.createElement("div");
+          seam.className = "seam";
+          seam.innerHTML = "<i></i><span>" + TIER_NAME[TIER_OF(i)] + "</span>";
+          strip.appendChild(seam);
+        }
+        strip.appendChild(roadNode(t, i));
+      }
+      reg.appendChild(strip);
+      /* fifteen nodes do not fit, so put the one you are actually up to in
+         view rather than always opening on level 1 */
+      const want = nextOpenLevel(t.id);
+      requestAnimationFrame(() => {
+        const n = strip.querySelectorAll(".node")[want];
+        if (n && n.offsetLeft > strip.clientWidth * .55)
+          strip.scrollLeft = n.offsetLeft - strip.clientWidth * .42;
+      });
+    } else {
+      /* ---- the tease, instead of a blank locked card ----
+         Silhouettes from the arena's REAL roster, drawn with the same
+         renderer the bestiary uses and then pushed behind a haze: you can
+         see there is something in there and roughly what shape it is, and
+         you cannot read it. The CSS bleeds a sliver of the arena's true
+         accent across the boundary so the colour arrives before the
+         content does. */
+      const fog = document.createElement("div");
+      fog.className = "fog";
+      const ghosts = document.createElement("div");
+      ghosts.className = "ghosts";
+      t.roster.slice(0, 5).concat([t.boss]).forEach((ty, k) => {
+        const cvs = document.createElement("canvas");
+        cvs.style.setProperty("--k", k);
+        ghosts.appendChild(cvs);
+        try { drawIcon(cvs, ty, ty === t.boss ? 56 : 40); } catch (e) {}
+      });
+      fog.appendChild(ghosts);
+      const haze = document.createElement("div");
+      haze.className = "haze";
+      haze.innerHTML = "<span>sealed</span>";
+      fog.appendChild(haze);
+      reg.appendChild(fog);
+    }
+
+    box.appendChild(reg);
+    roadMotif(motif, t, open);
+    if (open) reg.addEventListener("mouseenter", () => { tlSel = ti; });
   });
 }
+
 
 /* ---------------- the archive (lore + secrets + bestiary) ---------------- */
 let arcTab = "The Concordance";
@@ -278,9 +487,30 @@ function renderAdmin() {
     COSM.forEach((c) => SAVE.cosmetics.owned[c.id] = 1);
     syncCosmetics(); persist(); toast("Lab fully installed", "var(--chrono)");
   }));
+  r1.appendChild(btn("Clear every level", () => {
+    /* fills the whole Trophy Road at baseline trophies, which is what the
+       save migration does for a player arriving from the old structure */
+    TIMELINES.forEach((t) => {
+      const st = SAVE.tl[t.id];
+      st.entered = 1; st.cleared = 1;
+      for (let i = 0; i < LEVELS_PER_ARENA; i++) {
+        st.levels[i].cleared = 1; st.levels[i].bestPct = 1;
+        st.levels[i].trophies = Math.max(st.levels[i].trophies, levelBaseTrophies(t.id, i));
+      }
+      claimLadder(t.id);
+    });
+    recomputeTrophies(); persist();
+    toast("Trophy Road filled · " + fmt(SAVE.trophiesTotal) + " trophies", "var(--chrono)");
+    renderAdmin();
+  }));
   r1.appendChild(btn("Lock everything back", () => {
-    TIMELINES.forEach((t, i) => { if (i) { SAVE.tl[t.id].entered = 0; SAVE.tl[t.id].cleared = 0; } });
+    TIMELINES.forEach((t, i) => {
+      if (i) { SAVE.tl[t.id].entered = 0; SAVE.tl[t.id].cleared = 0; }
+      SAVE.tl[t.id].ladder = 0;
+      SAVE.tl[t.id].levels = SAVE.tl[t.id].levels.map(() => blankLevelRec());
+    });
     SAVE.secrets = {}; SAVE.lore = {};
+    recomputeTrophies();
     persist(); toast("Progress reset to first run", "var(--threat)"); renderAdmin();
   }, "danger"));
 
@@ -294,9 +524,9 @@ function renderAdmin() {
     const row = document.createElement("div");
     (t.levels || CH09_LEVELS).forEach((L, i) => {
       row.appendChild(btn((L.boss ? "★ " : "") + (i + 1) + " · " + L.name, () => {
-        setTimeline(t.id);
-        startPlay("play");
-        startLevel(i);
+        /* the same entry point the map uses, so the operator console cannot
+           drift out of sync with how a level actually starts */
+        enterLevel(t.id, i, 0);
       }));
     });
     wrap.appendChild(row);
@@ -309,7 +539,7 @@ function renderAdmin() {
     r3.appendChild(btn(EN[t.boss].label, () => {
       setTimeline(t.id);
       startPlay("play");
-      const li = (t.levels || CH09_LEVELS).findIndex((L) => L.boss);
+      const li = (t.levels || CH09_LEVELS).length - 1;
       G.levelIdx = Math.max(0, li);
       backdropDirty = true;
       Audio_.setPalette(curLevel());
@@ -466,6 +696,13 @@ function endRun() {
   G.mode = "dead";
   Audio_.target = .05;
   if (G.attract) { setTimeout(() => startAttract(), 900); return; }
+  /* A story level is a discrete ATTEMPT now, so dying in one is the end of
+     that attempt rather than the end of a run: it banks whatever fraction
+     of the level you actually got through (see finishLevel) and hands you
+     back to the map to try again, instead of throwing you to the branch's
+     level 1 with a fresh build. Survival is unchanged — it has no levels to
+     be partway through. */
+  if (!G.survival) { setTimeout(() => finishLevel(false), 2100); return; }
   const banked = Math.round(G.shards + (G.survival ? G.wave * 26 : (G.loop * LEVELS.length + G.levelIdx) * 40 + G.wave * 8));
   SAVE.shards += banked; SAVE.runs++;
   const reached = G.loop * LEVELS.length + G.levelIdx + 1;
@@ -517,6 +754,11 @@ function attractSpawn(dt) {
 function sim(dt) {
   G.time += dt;
   if (!G.attract) G.runTime += dt;
+  /* the attempt clock, which is what the par-time trophy bonus is judged
+     on. Scoped to this level rather than to the run, and it stops the
+     moment the last wave falls so the results animation is not charged to
+     the player's time. */
+  if (!G.attract && !G.survival && !G.levelDone && !G.carding) G.levelT += dt;
   const input = G.attract ? botInput() : humanInput();
   updatePlayer(dt, input);
   updateEchoes(dt);
@@ -526,6 +768,10 @@ function sim(dt) {
   updatePickups(dt);
   if (!G.attract) abilTick(dt);
   if (!G.attract && BRANCHFN.field) BRANCHFN.field(dt);
+  /* the barrier drones' walls. Ticked here rather than inside a branch
+     field hook because the drone is in four arenas' rosters and Chamber 09
+     has no field hook at all. */
+  if (!G.attract) barrierTick(dt);
   if (!G.attract) checkSecrets(dt);
   if (G.attract) attractSpawn(dt); else tickWaves(dt);
   if (G.comboTimer > 0) { G.comboTimer -= dt; if (G.comboTimer <= 0) G.combo = 0; }
@@ -548,6 +794,7 @@ function activeMenu() {
   return null;
 }
 /* where returnTo points, for screens reachable from more than one place */
+/* the level results screen belongs to the map, so Esc from it goes there */
 function returnToFor() {
   if (currentScreen === "pause") return "pause";
   if (currentScreen === "submenu") return "submenu";
@@ -625,6 +872,9 @@ addEventListener("keydown", (e) => {
       else if (returnTo === "submenu") { show("submenu"); selectMenu($("#submenuMenu"), 0); }
       else goHome();
     } else if (currentScreen === "pause") togglePause(false);
+    /* the level results belong to the map, so Esc goes back to the road
+       rather than all the way out to the main menu */
+    else if (currentScreen === "levelResult") route("timelines");
     else if (currentScreen === "results") route("home");
     else if (currentScreen === "none") togglePause(true);
     return;

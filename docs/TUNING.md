@@ -310,13 +310,24 @@ the reworked dash's use here.
 
 ## 9 · Where the layouts live
 
-`LAYOUTS` in `js/11-branch-physics.js` — twelve rooms, three per branch, held
-to four rules (cover that breaks a real sightline, at least one chokepoint,
-no two the same shape reskinned, and boss rooms keep the middle clear).
+`LAYOUTS` in `js/11-branch-physics.js`. It used to hold twelve rooms, three
+per branch. It holds **three** now, all of them Terminus's, because the four
+main arenas gave their static geometry up to the barrier drone (§16).
+
+Terminus keeps its rooms because its geometry *is* the clock — the spindle,
+the dial and the triangle all read off the centre the hands sweep from — and
+it indexes them by TIER rather than by level now that it has fifteen levels
+and three rooms: `terminusRoomFor(idx)` gives the spindle to Learn and Build,
+the dial to Master, and the triangle to the boss.
 
 Each layout returns `{ boxes, gates }`. `gates` are the chokepoints, and they
 are load-bearing data, not annotation: the Glassfall floor reads them to refuse
 to shatter a doorway away.
+
+The primitives the removed rooms were built from — `abox`/`vbar`/`hbar`/
+`arcbar`, `CHOKE_TIGHT/MID/OPEN`, and the `FLOOR_MIN`/`WALL_MAX_R` contract —
+are all still live and still load-bearing. The barrier drone builds its walls
+out of them.
 
 
 ---
@@ -588,3 +599,229 @@ guessed** (a Dart draws a lock line 320px out from a 13px body), and the
 measurement must force `globalAlpha` opaque and scan a wide area at reduced
 resolution, or fading and far-reaching art measures as absent and gets
 cropped in play.
+
+---
+
+## 16 · The Trophy Road
+
+Five arenas of **fifteen** levels each. A level is a discrete attempt: you
+enter one from the space-time map, you finish it, you go back to the map.
+Nothing chains.
+
+### The four tiers
+
+| Tier | Levels | Job | Built |
+|---|---|---|---|
+| Learn | 1–4 | teach one trick each, hazard staged on one piece at a time | templated |
+| Build | 5–9 | one new body per level, hazard fully on | templated |
+| Master | 10–14 | one hand-designed puzzle each, from that arena's own mechanics | authored |
+| Reckoning | 15 | the arena boss | authored |
+
+### Difficulty, and what it is calibrated against
+
+Difficulty is no longer implied by `G.levelIdx`. Every level carries an
+explicit `dt` (the tier the spawn maths reads) and `bud` (its base wave
+budget), both in `js/02b-arena-curve.js`. The old numbers they replaced:
+
+```
+old tier    = G.loop * 6 + G.levelIdx + (G.wave - 1) * .3
+old budget  = 12 + tier * 3.8 + n * 3.4
+```
+
+Three reference points from the game *before* this rework, which every tier
+below is aimed at:
+
+| Reference | old tier | old budget |
+|---|---|---|
+| level 2, wave 2 (the old opening) | 1.3 | 23.7 |
+| ch09 level 5, wave 4 (hardest ordinary content) | 4.9 | 44.2 |
+| the boss level | 5.9 | + boss |
+
+| Tier | `dt` | `bud` | Aimed at |
+|---|---|---|---|
+| Learn | 1.6 → 3.4 | 14 → 18 | a little **above** the old level-2 wave-2 |
+| Build | 4.2 → 6.6 | 20 → 26 | the old hardest ordinary content |
+| Master | 7.5 → 10.4 | 26 → 32 | the old boss level |
+| Reckoning | 13 | 30 | well past any boss in the old game |
+
+The new budget is `bud + dt * 2.2 + n * 3.4 + G.loop * 8`. Worked: Learn 1
+wave 2 lands at 24.3 against the old opening's 23.7; Build 9 wave 4 at 54.1
+against the old peak's 44.2; Master 14 wave 4 at 68.5.
+
+**`bossMul` (1.55)** is applied to the boss body only, in `spawnEnemy`, on
+top of the difficulty tier. The escort rides `dt` like everything else, but a
+boss's health comes off a flat table and would otherwise be exactly what it
+was when it sat at level 3 of 3. Its damage takes 60% of the same multiplier.
+
+### `ENEMY_RATE_BUFF` (1.35)
+
+`js/08-run-and-player.js`. One number, because every enemy in the game runs
+its wind-ups, volleys, sweeps and lunges off **one clock**: `dtr` in
+`updateEnemies`, which every AI counts `e.timer` down on. Bosses take it too,
+on their attack clocks only (`updateBoss`, and the four branch-boss clocks in
+`js/10-branch-ai.js`) — their movement stays on `dte`, so they attack more
+often without also orbiting faster.
+
+Raise this and the room gets **busier**, not spikier: it changes nothing
+about how much a hit costs, how much health anything has, or how fast
+anything moves.
+
+### Hazard staging
+
+`STAGE_FULL` and `stageOf(k)` in `js/02b-arena-curve.js`. A level's `stage`
+object names only the knobs it changes; everything unnamed falls back to
+STAGE_FULL, so survival, the attract loop and any unstaged level behave
+exactly as they always did.
+
+| Arena | knobs |
+|---|---|
+| Glassfall | `floor`, `floorRate`, `discs`, `discRate` |
+| Emberwake | `heat`, `heatDecay`, `wave`, `waveIn`, `waveStr`, `waveCalm`, `waveHold`, `spurts`, `spurtRate`, `spurtStill`, `corona` |
+| Nulltide | `current`, `currentStr`, `rewind`, `rewindEvery` |
+| Terminus | `clock`, `hands`, `toll`, `behind`, `entropy` |
+
+Rate-shaped knobs (`floorRate`, `rewindEvery`) **divide** the interval, so
+below 1 is *more often*.
+
+### Trophies
+
+`js/02c-trophy-road.js`.
+
+```
+base    = (position in the 75-level sequence) x 10
+trophies = base  x  how much of the level you finished  x  (1 + bonuses)
+```
+
+Finishing is 1.0; dying is `wave / waves`. Bonuses stack and only apply to a
+level you actually finished: **+15%** untouched, **+10%** under the level's
+`par`, **+25%** with a mutation replay on. Only the best-ever result per
+level is kept — you can never lose trophies.
+
+Par times by tier: 55s Learn, 78s Build, 96s Master, 155s Reckoning.
+
+### Rewards — two tracks
+
+**First clear** (`reward` on the level object, built by `rewardFor`): every
+level pays `60 + pos * 14` shards. Levels 3, 6, 9, 12 and 15 of each arena
+also pay a named unlock, which is how the whole ability and cosmetic
+catalogue becomes earnable by playing. Levels 4 and 14 pay an archive entry.
+
+**Arena ladder** (`LADDER_MARKS`, `LADDER_REWARDS`): five rungs at 25/40/55/
+70/85% of what that arena could pay if every level in it ran perfectly.
+Expressed as a fraction rather than a flat number because the arenas are
+worth wildly different amounts — Chamber 09 caps around 1,800 and Terminus
+around 15,300, so a flat "every 1,000" would be two rungs in one arena and
+fifteen in another. The top rung is deliberately not 100%.
+
+`grantReward(r, why, mul)` is the **only** thing that hands a reward over,
+for either track. `mul` is the gacha "double this" hook point; nothing passes
+it today.
+
+---
+
+## 17 · The barrier drone
+
+One enemy, four skins, replacing the static room geometry the main arenas
+used to be built out of. `EN.pylon` / `pane` / `shimmer` / `bulkhead`
+(`js/02b-arena-curve.js`), one shared AI (`barrierDroneAI` in
+`js/10-branch-ai.js`), one shared painter (`ART.__drone` in
+`js/05-branch-art.js`), and the wall system in `js/11-branch-physics.js`.
+
+| Constant | Value | What it is |
+|---|---|---|
+| `BARRIER_LIFE` | 11 | seconds a projected wall stands |
+| `BARRIER_WARN` | .85 | wind-up before it materialises |
+| `BARRIER_LEN` | 190 | wall length, px |
+| `BARRIER_RANGE` | 210 | how far from the drone it plants |
+| `BARRIER_CD_MIN/MAX` | 7.5 / 11 | gap between projections |
+| `BARRIER_MAX` | 3 | walls one room may hold at once |
+
+The wall is a full solid pushed into the same `arenaBoxes()` list the
+authored geometry used, so every existing query — `arenaBlocked`, `arenaRay`,
+`arenaSolidAt`, `resolveSolids`, `slideAlongWall` — handles it with no new
+code. `barrierBoxes()` rebuilds the combined list only when `G.barrierVer` or
+the layout signature changes, because `arenaBoxes()` is asked several times
+per body per frame.
+
+Two rules make it fair rather than annoying, and both are load-bearing:
+
+- **Killing the drone takes the wall with it.** That is the whole reason this
+  is better than geometry: the obstacle has a health bar.
+- **It is never placed on top of you.** `barrierSpot` refuses any position
+  within `BARRIER_LEN * .6 + p.r + 30` of the player, and the wind-up
+  telegraphs the exact footprint through the normal `trace()` system.
+
+Its own attacks are deliberately weak and slow. The decision it creates —
+kill it to open the room back up, or fight around what it built — evaporates
+if the drone is also dangerous enough that you have to kill it anyway.
+
+Terminus has no drone. Its geometry is the clock.
+
+---
+
+## 18 · Enemies are immune to level hazards
+
+There were two places a level hazard damaged enemies, and both are gone:
+
+- the Terminus clock hand (`terminusClock`, was `TERM_HAND_ENEMY_DMG`)
+- the Emberwake corona sweep (the `damageEnemy(e, 26 * dt, …)` in the
+  `emberwake` field hook)
+
+A room that fights on your behalf turns every hazard into a tool, and a
+hazard you can herd bodies into is not a hazard — it is a weapon you did not
+have to earn. `TERM_HAND_ENEMY_DMG` is left defined and unused on purpose: it
+is the one number to put back if this ever returns behind a flag.
+
+What is **not** affected: Glassfall's stasis shatter (`onKill`), where a body
+dying inside a disc damages its neighbours. That is caused by the player
+killing something, not by the room.
+
+---
+
+## 19 · Performance, third pass — the two "known" lag sources
+
+Two things were named as lag sources: the dash's burning trail and the
+Terminus clock's per-frame tick damage. **Both were profiled before anything
+was changed, and neither is a lag source.** Nothing was changed.
+
+Method, because the first attempt was misleading: a CPU sampling profile of
+headless Chromium is ~80% `(program)` and `drawImage` — the software
+rasteriser — which says nothing about which half of a game feature costs
+what. So the real measurement wraps the functions directly and A/Bs the
+feature on and off in an otherwise identical room (34 bodies, player dashing
+every frame), median of three six-second trials:
+
+| case | sim | render | zones/frame | damageEnemy | clock |
+|---|---|---|---|---|---|
+| burn off | 0.43ms | 15.02ms | 1.8 | 0.054ms | — |
+| burn ×2 | 0.38ms | 15.23ms | 7.8 | 0.073ms | — |
+| burn ×2, paint suppressed | 0.43ms | 15.03ms | 9.7 | 0.074ms | — |
+| burn ×2, damage suppressed | 0.47ms | 15.32ms | 7.4 | 0.037ms | — |
+| clock, 1 hand | 0.31ms | 16.54ms | — | 0.037ms | 0.049ms |
+| clock, 3 hands | 0.33ms | 16.26ms | — | 0.030ms | 0.045ms |
+| clock, 3 hands, tick removed | 0.65ms | 13.61ms | — | 0.010ms | 0.074ms |
+
+Read the burn rows across: **render is identical whether the trail is off,
+on, drawn-but-harmless, or harmful-but-undrawn.** The zone discs cost
+0.02ms/frame at ten zones and the per-enemy zone scan costs 0.06ms. The
+clock's tick costs 0.05–0.07ms and removing it does not reduce it.
+
+Both had already been fixed by the pass documented in §15: the trail is laid
+by *distance* rather than per frame and capped at seven patches, and zone
+damage is one `damageEnemy` call per body per frame instead of one per
+overlapping patch.
+
+What the frame actually costs, from the same harness: **render 15ms with
+bloom on, 4.3ms with bloom off** — the bloom composite is ~70% of the frame
+and has nothing to do with either feature. It is already what the adaptive
+quality ladder sheds first (§15), and it is where any further work belongs.
+
+**Regression check after this whole rework**, same harness, same scenario,
+baseline vs. HEAD: **14.8–15.4ms → 14.6–14.8ms**. The barrier drone's walls
+cost 0.087ms/frame for three of them.
+
+One trap worth recording: a harness that measures `render()` by wall clock
+can report 350ms/frame while the CPU profile of the same run shows **52%
+idle**. That is the headless compositor stalling, not work. Any number
+produced that way has to be confirmed against a same-harness A/B before it
+means anything.

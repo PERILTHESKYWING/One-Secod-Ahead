@@ -230,7 +230,7 @@ function updateEnemies(dt) {
     if (e.iframeT > 0) e.iframeT -= dt;
     if (e.mut) { mutTick(e, dt); dte *= mutSpeedMul(e); }
     if (e.brandT > 0) { e.brandT -= dt; if (e.brandT <= 0) e.brand = 0; }
-    const dtr = dte * (e.rateMul || 1);
+    const dtr = dte * (e.rateMul || 1) * ENEMY_RATE_BUFF;
     const t = targetFor(e);
     const ang = Math.atan2(t.y - e.y, t.x - e.x);
     /* one line-of-sight test per body per frame, shared by everything that
@@ -566,7 +566,9 @@ function updateEnemies(dt) {
 function updateBoss(e, dt, t, ang) {
   const f = e.hp / e.maxHp;
   e.phase = f < .35 ? 2 : f < .7 ? 1 : 0;
-  e.timer -= dt;
+  /* the attack clock takes the global rate buff; the movement below does
+     not, so the Paradox attacks more often without also orbiting faster */
+  e.timer -= dt * ENEMY_RATE_BUFF;
   e.spin = (e.spin || 0) + dt * (.6 + e.phase * .5);
   const d = dist(e, t), orbit = 280;
   const want = d < orbit - 40 ? -1 : d > orbit + 40 ? 1 : 0;
@@ -896,6 +898,10 @@ function drawWorld() {
      read the wall as cover instead of as a pattern on the floor. The
      player stays on top so you never lose yourself behind one. */
   if (BRANCHFN.walls && !G.attract) { ctx.save(); try { BRANCHFN.walls(); } catch (err) {} ctx.restore(); }
+  /* the projected walls go down in the same band, for the same reason, and
+     outside the branch hook because four arenas can have them and one of
+     those four (Chamber 09) has no branch hook */
+  if (!G.attract) { ctx.save(); try { drawBarriers(); } catch (err) {} ctx.restore(); }
   /* Your pulses. Each one used to build its own linear gradient every
      frame — a fresh gradient object per bullet per frame, which is an
      allocation and a shader setup for a 20px streak. Two flat strokes in

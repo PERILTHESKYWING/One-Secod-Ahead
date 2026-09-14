@@ -72,6 +72,90 @@ function wire(fn, col, w, a) {
 
 Object.assign(ART, {
 
+  /* ================= THE BARRIER DRONE =============================== */
+  /* One body, four paint jobs — the enemy that replaced the main arenas'
+     static room geometry. It has to read at a glance as "the thing holding
+     that wall up", so the silhouette is the same in every arena: a squat
+     hull with an emitter ring that opens while it is winding up and stays
+     lit while its wall is standing. Only the palette and the motif inside
+     the ring change per branch. */
+  __drone(e, c, motif) {
+    const r = e.r;
+    const holding = !!e.barrier;
+    const winding = e.state === 1;
+    const pale = "rgb(" + shade(c, 1.3, .4, [255, 255, 255]) + ")";
+    const deep = "rgb(" + shade(c, .3) + ")";
+    ctx.save();
+    ctx.rotate(e.ang);
+    /* the emitter ring: shut when idle, open and spinning while it works */
+    const open = winding ? clamp(1 - e.timer / BARRIER_WARN, 0, 1) : holding ? 1 : .18;
+    ctx.globalAlpha = .25 + open * .55;
+    ctx.strokeStyle = pale;
+    ctx.lineWidth = 2.2;
+    ctx.save();
+    ctx.rotate(G.time * (winding ? 5 : holding ? 1.6 : .5));
+    for (let i = 0; i < 3; i++) {
+      const a0 = i * TAU / 3 + .2, a1 = a0 + TAU / 3 * (.36 + open * .34);
+      ctx.beginPath(); ctx.arc(0, 0, r * (1.18 + open * .18), a0, a1); ctx.stroke();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    /* hull */
+    ctx.fillStyle = bodyGrad("droneB", r, pale, deep);
+    rrect(-r * .82, -r * .62, r * 1.64, r * 1.24, r * .34); ctx.fill();
+    ctx.strokeStyle = "rgba(" + c + ",.9)"; ctx.lineWidth = 1.6;
+    rrect(-r * .82, -r * .62, r * 1.64, r * 1.24, r * .34); ctx.stroke();
+    /* the projector aperture on the front face, which is what the wall
+       comes out of — brighter the closer it is to firing */
+    ctx.fillStyle = "rgba(" + c + "," + (.35 + open * .6) + ")";
+    rrect(r * .52, -r * .34, r * .3, r * .68, r * .12); ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255," + (.2 + open * .6) + ")";
+    rrect(r * .6, -r * .18, r * .14, r * .36, r * .06); ctx.fill();
+    /* the per-arena motif in the middle of the hull */
+    ctx.save();
+    ctx.strokeStyle = pale; ctx.lineWidth = 1.5;
+    ctx.globalAlpha = .5 + open * .4;
+    if (motif === "glass") {
+      /* a shard: three lines meeting off-centre */
+      ctx.beginPath();
+      ctx.moveTo(-r * .3, -r * .3); ctx.lineTo(r * .12, r * .02); ctx.lineTo(-r * .24, r * .32);
+      ctx.stroke();
+    } else if (motif === "heat") {
+      /* two heat ripples */
+      for (let k = 0; k < 2; k++) {
+        ctx.beginPath();
+        for (let i = 0; i <= 8; i++) {
+          const x = -r * .34 + (i / 8) * r * .68;
+          const y = (k ? r * .16 : -r * .16) + Math.sin(i * .9 + G.time * 4 + k) * r * .09;
+          i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        ctx.stroke();
+      }
+    } else if (motif === "water") {
+      /* a pressure gauge arc with a needle */
+      ctx.beginPath(); ctx.arc(0, r * .06, r * .3, Math.PI, 0); ctx.stroke();
+      const nd = Math.PI + Math.PI * (.25 + open * .6);
+      ctx.beginPath(); ctx.moveTo(0, r * .06);
+      ctx.lineTo(Math.cos(nd) * r * .26, r * .06 + Math.sin(nd) * r * .26); ctx.stroke();
+    } else {
+      /* hard light: a plain bracket, the baseline version */
+      ctx.beginPath();
+      ctx.moveTo(-r * .3, -r * .26); ctx.lineTo(-r * .3, r * .26);
+      ctx.moveTo(r * .04, -r * .26); ctx.lineTo(r * .04, r * .26);
+      ctx.stroke();
+    }
+    ctx.restore();
+    /* the stabiliser feet, splayed while it is holding a wall up */
+    const splay = holding ? .5 : .18;
+    for (let i = -1; i <= 1; i += 2)
+      strut(-r * .6, i * r * .5, r * .55, i > 0 ? 1.1 : -1.1, splay * i, "rgb(" + shade(c, .6) + ")", 3);
+    ctx.restore();
+  },
+  pylon(e, c) { ART.__drone(e, c, "light"); },
+  pane(e, c) { ART.__drone(e, c, "glass"); },
+  shimmer(e, c) { ART.__drone(e, c, "heat"); },
+  bulkhead(e, c) { ART.__drone(e, c, "water"); },
+
   /* ================= GLASSFALL ======================================= */
 
   /* FACET — a cut tetrahedron caught mid-fall, throwing three refractions */

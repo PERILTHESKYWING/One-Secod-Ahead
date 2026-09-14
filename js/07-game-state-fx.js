@@ -12,7 +12,15 @@ const G = {
   survival: false, chroma: 0, slowmo: 0, deathT: 0, elites: 0,
   player: null, mods: null, cores: {}, boss: null, shakeDir: { x: 0, y: 0 },
   stasis: [], chill: [], pillars: [], charges: [], omegaEchoes: [], wake: [], snap: [],
+  barriers: [], barrierVer: 0,
   killed: {}, heat: 0, jam: 0, entropy: 60, entropyMax: 60, tideT: 15, tideWarn: 0,
+  /* ---- the level attempt, for the Trophy Road ------------------------
+     Reset by startLevel(), read by finishLevel(). `levelHits` is what the
+     untouched bonus is judged on and `levelT` is what the par-time bonus is
+     judged on, both scoped to THIS level attempt rather than to the run —
+     which is the whole point of levels being discrete now. `mutation` is
+     the replay toggle from the map screen. */
+  levelHits: 0, levelT: 0, mutation: 0, levelDone: 0, levelResolved: 0, attemptTrophy: null,
   coronaAng: 0, current: 0, drain: 0, sealT: 0, shotsThisWave: 0, codaKills: [], safeWedge: null,
 };
 function curLevel() { return LEVELS[clamp(G.levelIdx, 0, LEVELS.length - 1)]; }
@@ -20,10 +28,18 @@ function levelLabel() {
   if (G.survival) return "Wave " + G.wave;
   return G.loop > 0 ? "Level " + (G.levelIdx + 1) + " · loop " + (G.loop + 1) : "Level " + (G.levelIdx + 1);
 }
-/* one number for "how bad is it right now" — feeds hp, speed and elite odds */
+/* one number for "how bad is it right now" — feeds hp, speed and elite odds.
+   A level's difficulty used to be implied by its index, which meant the
+   curve could only ever be a straight line. Every level now carries an
+   explicit `dt` instead (see the CALIBRATION block in 02b-arena-curve.js),
+   so the four tiers can each sit where they were aimed rather than wherever
+   the slope happened to put them. The index is still the fallback, which is
+   what keeps any level authored without a `dt` behaving as it always did. */
 function tierNow() {
   if (G.survival) return (G.wave - 1) * .8;
-  return G.loop * 6 + G.levelIdx + (G.wave - 1) * .3;
+  const L = curLevel();
+  const base = L && L.dt != null ? L.dt : G.levelIdx;
+  return G.loop * LEVELS_PER_ARENA + base + (G.wave - 1) * .3;
 }
 
 /* ---------------- feel: trauma, hit-stop, hit-flash --------------------

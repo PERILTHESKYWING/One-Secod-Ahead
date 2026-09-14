@@ -156,13 +156,16 @@ function clearWorld() {
   G.ghosts = []; G.shocks = []; G.debris = []; G.corpses = [];
   G.boss = null; G.trauma = 0; G.freeze = 0;
   G.stasis = []; G.chill = []; G.pillars = []; G.charges = []; G.omegaEchoes = [];
+  /* the barrier drones' projected walls, which live in the same solids list
+     as the authored geometry (see 11-branch-physics.js) */
+  G.barriers = []; G.barrierVer = (G.barrierVer || 0) + 1;
   G.wake = []; G.snap = []; G.safeWedge = null;
   /* the room's own accumulated state — a shattered Glassfall floor, a
      Terminus clock mid-escalation (see resetBranchLevel in
      11-branch-physics.js) */
   if (typeof resetBranchLevel === "function") resetBranchLevel();
 }
-function newRun(survival) {
+function newRun(survival, startAt) {
   G.mode = "play"; G.attract = false; G.paused = false; G.drafting = false; G.carding = false;
   G.survival = !!survival; G.elites = 0;
   G.chroma = 0; G.slowmo = 0; G.deathT = 0;
@@ -172,12 +175,16 @@ function newRun(survival) {
      than once at boot */
   buildAbilities();
   G.score = 0; G.kills = 0; G.shards = 0; G.combo = 0; G.comboTimer = 0; G.runTime = 0;
-  G.levelIdx = 0; G.loop = 0; G.wave = 0; G.breather = 0; G.draftIn = 0;
+  G.levelIdx = startAt || 0; G.loop = 0; G.wave = 0; G.breather = 0; G.draftIn = 0;
+  G.mutation = survival ? 0 : G.mutation;
   clearWorld();
   resetBranchState();
   G.player = makePlayer();
   makeDust();
-  startLevel(0);
+  /* startAt is which level of the arena to open on — the map hands it
+     straight here rather than starting at level 1 and then jumping, which
+     used to build the room and the hull twice per entry */
+  startLevel(G.levelIdx);
 }
 function installCore(core, silent) {
   const have = G.cores[core.id] || 0;
@@ -197,15 +204,53 @@ function makeDust() {
   for (let i = 0; i < 46; i++) G.dust.push({ x: rnd(W), y: rnd(H), z: rnd(1, .3), s: rnd(2.2, .6), a: rnd(TAU) });
 }
 
-/* ---------------- levels + waves --------------------------------------- */
+/* ---------------- levels + waves ---------------------------------------
+   A "run" used to be a continuous trip through every level in a branch:
+   clearWorld() reset your mods ONCE, at the start of the branch, and a
+   level clear fed straight into startLevel(idx + 1) with your drafted build
+   carried forward. Levels are discrete attempts now — you enter one from
+   the map, you finish it, and you go back to the map — so the reset moved
+   with them.
+
+   MODS RESET EVERY LEVEL ATTEMPT. Every attempt starts from baseMods() plus
+   your persistent three-ability loadout, full stop. Two reasons, one of
+   which is the whole reason the Trophy Road works at all:
+
+     · trophies are directly comparable between attempts. You cannot
+       out-trophy your own record purely by having stacked more mods on the
+       way in, so the number measures how you played rather than how long
+       you had been playing.
+     · it reframes the draft as "your build for this fight" instead of "your
+       build for this whole branch", which is why the draft moved from level
+       clear to WAVE clear (see tickWaves) — a core handed out as the level
+       ends would be a core you never get to use.
+
+   The cost, worth naming once rather than discovering later: the "build
+   snowballs the deeper you go in one sitting" arc is gone. That is a
+   deliberate trade for the level structure, not an oversight. */
 function startLevel(idx) {
   G.levelIdx = idx;
   G.wave = 0; G.breather = 0; G.waveClearing = false;
+  G.draftIn = 0; G.drafting = false;
   backdropDirty = true;
   const L = curLevel();
   Audio_.setPalette(L);
   Audio_.target = .3;
   clearWorld();
+  if (!G.survival && !G.attract) {
+    G.mods = baseMods();
+    G.cores = {};
+    abilReset();
+    buildAbilities();
+    /* this attempt's own record, for the trophy formula */
+    G.levelHits = 0; G.levelT = 0; G.levelDone = 0; G.levelResolved = 0;
+    G.attemptTrophy = null;
+    /* a fresh hull: an attempt is not scored against how much integrity the
+       last one happened to leave you with. clearWorld() first, so the spawn
+       point is picked against the room this level actually has. */
+    G.player = makePlayer();
+    makeDust();
+  }
   showLevelCard(L);
 }
 function beginLevelWaves() { clearTimeout(hookTimer); G.cardIn = 0; G.carding = false; $("#levelCard").classList.remove("on"); startWave(1); }
@@ -277,17 +322,28 @@ function startWave(n) {
   const L = curLevel();
   G.wave = n; G.waveClearing = false;
   if (G.survival) { startSurvivalWave(n); return; }
-  const tier = G.loop * 6 + G.levelIdx;
+  const tier = L.dt != null ? L.dt : G.loop * LEVELS_PER_ARENA + G.levelIdx;
   const isBoss = L.boss && n === L.waves;
   /* The opening waves used to be a warm-up for a pilot who had not bought
-     anything yet. That pilot no longer exists, so wave 1 now lands with
-     roughly double the bodies it used to and the per-wave ramp is steeper. */
-  const budget = Math.round(12 + tier * 3.8 + n * 3.4 + G.loop * 8);
+     anything yet. That pilot no longer exists, so wave 1 lands with roughly
+     double the bodies it used to and the per-wave ramp is steeper.
+
+     The base is the LEVEL's now (`bud`), not a constant — which is what
+     lets the four tiers each sit at their own calibrated weight instead of
+     all riding one slope. See 02b-arena-curve.js. */
+  const budget = Math.round((L.bud != null ? L.bud : 12) + tier * 2.2 + n * 3.4 + G.loop * 8);
   G.queue = [];
   if (isBoss) {
     G.queue.push({ type: TL.boss, t: 1 });
-    const add = TL.roster[0];
-    for (let i = 0; i < 5; i++) G.queue.push({ type: add, t: 2.4 + i * .6 });
+    /* The finale used to be the boss plus five of the arena's cheapest
+       body, at whatever difficulty level 3 or 6 happened to be. Bosses read
+       as too easy for what they are, so the Reckoning tier gets the escort
+       scaled with the level's own budget as well as the boss multiplier
+       spawnEnemy applies — a finale should be the hardest fight in its
+       arena by a clear margin, not a victory lap. */
+    const add = TL.roster[0], heavy = TL.roster[Math.min(3, TL.roster.length - 1)];
+    const n7 = 5 + Math.round(budget / 14);
+    for (let i = 0; i < n7; i++) G.queue.push({ type: i % 3 === 2 ? heavy : add, t: 2.4 + i * .5 });
   } else {
     const eliteOdds = clamp((tier - 1) * .04 + .03, 0, .34);
     const tmplId = L.waveTemplates && L.waveTemplates.length ? L.waveTemplates[(n - 1) % L.waveTemplates.length] : null;
@@ -380,17 +436,39 @@ function edgePoint(side) {
 const ENEMY_HP_BUFF = 1.4;
 const ENEMY_DMG_BUFF = 1.18;
 const ENEMY_SPEED_BUFF = 1.08;
+/* ---- how fast the room attacks ---------------------------------------
+   Every enemy in the game runs its wind-ups, volleys, sweeps and lunges off
+   ONE clock: `dtr` in updateEnemies (09-enemies-and-render.js), which is
+   the frame delta scaled by whatever rate multipliers the body is carrying.
+   Every AI counts its own `e.timer` down on that clock, so this is the one
+   number that changes how fast the whole roster attacks — not a pass over
+   thirty-odd per-enemy tables that would drift apart the first time one of
+   them was edited.
+
+   Combat read as too slow at every difficulty: the bodies arrived, and then
+   there was a beat of nothing while they all wound up. This closes the gaps
+   between attacks without touching how much each one hurts, how much health
+   anything has, or how fast anything moves — the room gets busier, not
+   spikier, which is the difference between "faster" and "cheaper". */
+const ENEMY_RATE_BUFF = 1.35;
 function spawnEnemy(type, x, y, elite) {
   const d = EN[type];
   const tier = tierNow();
   /* a branch can be flatly harder than the baseline — see TIMELINES[].diff.
      Health takes the multiplier whole; speed takes a third of it. */
   const diff = TL && TL.diff ? TL.diff : 1;
-  const hpMul = (1 + tier * .17 + G.loop * .5) * (elite ? 2.4 : 1) * diff * ENEMY_HP_BUFF;
+  /* the Reckoning tier's own multiplier, applied to the BOSS only: the
+     escort already rides the level's difficulty tier, but the boss's health
+     and damage come off a flat table and would otherwise be exactly what
+     they were when it sat at level 3 of 3. See bossMul in 02b-arena-curve.js. */
+  const L = curLevel();
+  const bm = (!G.survival && L && L.bossMul && BOSSES[type]) ? L.bossMul : 1;
+  const hpMul = (1 + tier * .17 + G.loop * .5) * (elite ? 2.4 : 1) * diff * ENEMY_HP_BUFF * bm;
   const spMul = Math.min(1.65, 1 + tier * .024) * (elite ? 1.16 : 1) * (1 + (diff - 1) * .34) * ENEMY_SPEED_BUFF;
   const e = {
     type, x, y, vx: 0, vy: 0, r: d.r, hp: d.hp * hpMul, maxHp: d.hp * hpMul,
-    sp: d.sp * spMul, dmg: d.dmg * ENEMY_DMG_BUFF, ang: rnd(TAU), wob: rnd(TAU), hit: 0, state: 0,
+    sp: d.sp * spMul, dmg: d.dmg * ENEMY_DMG_BUFF * (bm > 1 ? 1 + (bm - 1) * .6 : 1),
+    ang: rnd(TAU), wob: rnd(TAU), hit: 0, state: 0,
     timer: rnd(.4, 1.6), born: 0, sh: null, blink: 1, blinkT: rnd(3, 1),
     face: rnd(TAU), deflect: 0, fuse: 0, lockAng: 0, pop: 0, tether: 0, birth: 0, burst: 0,
     stun: 0, brand: 0, brandT: 0, mut: null, iframeT: 0,
@@ -414,6 +492,9 @@ function spawnEnemy(type, x, y, elite) {
      everything that ever enters the room — including the ones other enemies
      summon or split into. */
   if (G.survival && !BOSSES[type] && chance(mutChance())) makeSpecial(e);
+  /* the same system, opted into deliberately on a level you have already
+     cleared — see the mutation replay in 02c-trophy-road.js */
+  else if (G.mutation && !G.survival && !BOSSES[type] && chance(mutReplayChance())) makeSpecial(e);
   G.enemies.push(e);
   if (!SAVE.seen[type]) { SAVE.seen[type] = 1; persist(); }
   return e;
@@ -460,29 +541,78 @@ function tickWaves(dt) {
     if (G.shotsThisWave === 0 && G.kills > 0) unlockSecret("observer");
     G.shotsThisWave = 0;
     if (G.wave >= L.waves) {
-      G.score += 250 * (G.levelIdx + 1 + G.loop * 6);
+      G.score += 250 * (G.levelIdx + 1 + G.loop * LEVELS_PER_ARENA);
       text(W / 2, H * .42, "level cleared", TH.core, 22);
       Audio_.confirm();
-      G.draftIn = 1.1;
+      G.levelDone = 1;
+      /* the attempt ends here rather than chaining into the next level —
+         see finishLevel() */
+      setTimeout(() => { if (G.mode === "play" && G.levelDone) finishLevel(true); }, 1200);
     } else {
-      G.breather = 2.6;
+      /* The draft moved here, from level clear to WAVE clear. Mods reset
+         every level attempt now (see startLevel), so a core handed out as
+         the level ENDS is a core that never gets fired — it would be
+         installed into a build that is about to be thrown away. Drafting
+         between the waves of a level is what makes "your build for this
+         fight" a real sentence. */
       text(W / 2, H * .42, "wave cleared", TH.core, 18);
       Audio_.confirm();
+      G.draftIn = 1.0;
     }
     updateWaveDots();
   }
 }
+/* Called when the draft closes. In survival it goes back to the waves; in a
+   story arena it resumes the level the draft interrupted, because the draft
+   now happens BETWEEN WAVES rather than between levels. Nothing auto-chains
+   into the next level any more — see finishLevel(). */
 function nextLevel() {
   if (G.survival) { G.breather = 1.5; return; }
-  let idx = G.levelIdx + 1;
-  if (idx >= LEVELS.length) {
-    markBranchCleared();
-    if (TL.id !== "ch09") { branchVictory(); return; }
-    idx = 0; G.loop++;
-  }
-  SAVE.bestLevel = Math.max(SAVE.bestLevel, G.loop * LEVELS.length + G.levelIdx + 1);
+  G.breather = 1.4;
+}
+
+/* ---------------- finishing a level attempt ----------------------------
+   The end of every story-level attempt, cleared or died, and the only place
+   an attempt is scored. It banks the trophies, pays the first-clear reward
+   if this was one, and hands the player back to the map — which is the
+   actual structural change this whole rework rests on. Before, a clear fed
+   straight into the next level and a death threw you back to the branch's
+   level 1; neither let you choose what to play next. */
+function finishLevel(cleared) {
+  if (G.survival || G.attract || G.levelResolved) return;
+  G.levelResolved = 1;
+  G.levelDone = 0;
+  const L = curLevel();
+  const idx = G.levelIdx;
+  const arena = TL.id;
+  const waves = Math.max(1, L.waves || 1);
+  const a = {
+    cleared: !!cleared,
+    /* Died partway: WHICH WAVE you were on, over the level's wave count.
+       Dying on wave 2 of a four-wave level is 50%, not 37.5% — the wave you
+       are standing in counts as reached, which is what makes a failed
+       attempt bank something worth having rather than something rounded
+       down to nearly nothing. */
+    pct: cleared ? 1 : clamp(G.wave / waves, 0, 1),
+    noHit: G.levelHits === 0,
+    fast: G.levelT <= (L.par || 90),
+    mutation: !!G.mutation,
+  };
+  const res = recordAttempt(arena, idx, a);
+  G.attemptTrophy = res;
+  /* Chamber 09 is the one arena with nothing waiting behind it, so it keeps
+     its endless loop past level 15 as post-clear farming. Every other arena
+     stops at its boss and hands you the next branch instead. */
+  if (cleared && idx === LEVELS_PER_ARENA - 1) { markBranchCleared(); branchVictory(); }
+  SAVE.bestLevel = Math.max(SAVE.bestLevel, G.loop * LEVELS_PER_ARENA + idx + 1);
+  SAVE.bestScore = Math.max(SAVE.bestScore, G.score);
+  const banked = Math.round(G.shards);
+  SAVE.shards += banked;
+  SAVE.runs++;
   persist();
-  startLevel(idx);
+  G.mode = "dead";
+  Audio_.target = .05;
+  showLevelResults(cleared, banked, res);
 }
 
 /* ---------------- damage ----------------------------------------------- */
@@ -544,7 +674,7 @@ function killEnemy(e) {
     if (e.mod === "volatile") explode(e.x, e.y, 168, 30, "255,196,120", 1);
   }
   G.combo++; G.comboTimer = 3.2;
-  G.score += Math.round(d.score * (1 + Math.min(G.combo, 30) * .1) * (1 + (G.levelIdx + G.loop * 6) * .12));
+  G.score += Math.round(d.score * (1 + Math.min(G.combo, 30) * .1) * (1 + (G.levelIdx + G.loop * LEVELS_PER_ARENA) * .12));
   G.kills++;
   const p = G.player;
   if (p && p.surgeActive <= 0) {
@@ -639,6 +769,10 @@ function hurtPlayer(n, src, shot) {
     return;
   }
   p.hp -= n;
+  /* the untouched bonus is judged on this: anything that actually takes
+     integrity off counts, including the room's own hazards — "untouched"
+     means untouched, not "nothing with a face hit me" */
+  G.levelHits++;
   p.hurtFlash = Math.min(1, p.hurtFlash + n / 26);
   p.hitFlash = HIT_FLASH_PLAYER;
   if (n > 5) {
