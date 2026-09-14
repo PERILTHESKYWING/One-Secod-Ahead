@@ -319,7 +319,7 @@ const TLAI = {
         /* corona lash — two counter-rotating beams */
         const a0 = Math.atan2(t.y - e.y, t.x - e.x);
         for (let k = 0; k < 2; k++) {
-          trace({ x: e.x, y: e.y, ang: a0 + k * Math.PI, len: Math.max(W, H) * 1.3, wide: 34,
+          trace({ thru: 1, x: e.x, y: e.y, ang: a0 + k * Math.PI, len: Math.max(W, H) * 1.3, wide: 34,
             warn: .95, live: .34, fade: 1.4, dmg: 28, dot: 14, spin: k ? 1.1 : -1.1,
             owner: "perihelion", col: ecol(EN.perihelion.col), follow: e, stick: 1 });
         }
@@ -494,7 +494,7 @@ const TLAI = {
         const skip = rint(0, cols - 1);
         for (let i = 0; i < cols; i++) {
           if (i === skip) continue;
-          trace({ x: (W / (cols + 1)) * (i + 1), y: -40, ang: Math.PI / 2, len: H + 80, wide: 46,
+          trace({ thru: 1, x: (W / (cols + 1)) * (i + 1), y: -40, ang: Math.PI / 2, len: H + 80, wide: 46,
             warn: 1.1, live: .28, fade: .8, dmg: 26, col: ecol(EN.drownedindex.col) });
         }
         Audio_.tideWarn();
@@ -674,7 +674,7 @@ const TLAI = {
       } else if (roll === 1) {
         /* it dashes through you and leaves a burning wake */
         e.dashA = ang; e.dashT = .34;
-        trace({ x: e.x, y: e.y, ang, len: 620, wide: 40, warn: .5, live: .2, fade: .8,
+        trace({ thru: 1, x: e.x, y: e.y, ang, len: 620, wide: 40, warn: .5, live: .2, fade: .8,
           dmg: 26, dot: 12, owner: "omega", col: ecol(EN.omega.col), follow: e, aim: 1 });
         Audio_.lock(1.1);
         e.timer = 3 - e.phase * .4;
@@ -692,7 +692,7 @@ const TLAI = {
         /* purge cross — the same move the Paradox used, done properly */
         const a0 = ang;
         for (let k = 0; k < 4; k++) {
-          trace({ x: e.x, y: e.y, ang: a0 + k * Math.PI / 2, len: Math.max(W, H) * 1.3, wide: 26,
+          trace({ thru: 1, x: e.x, y: e.y, ang: a0 + k * Math.PI / 2, len: Math.max(W, H) * 1.3, wide: 26,
             warn: .85, live: .3, fade: 1.2, dmg: 28, dot: 12, spin: .55,
             owner: "omega", col: ecol(EN.omega.col), follow: e, stick: 1 });
         }

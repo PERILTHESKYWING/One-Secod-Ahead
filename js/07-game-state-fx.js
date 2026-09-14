@@ -324,15 +324,36 @@ function trace(o) {
     kind: "line", x: 0, y: 0, ang: 0, len: 480, wide: 18, spin: 0, r: 200,
     t: 0, warn: .7, live: .16, fade: .8, dmg: 0, dot: 0,
     col: TH.hazard, follow: null, aim: 0, aim0: 0, owner: "", hits: [], braked: 0, read: 0,
+    thru: 0, clipT: -1, clipLen: 0,
   }, o);
+  /* a boss's sweeps cross the whole room by design; the boss arenas keep
+     their middle clear so those lines still have somewhere to go */
+  if (tr.owner && typeof BOSSES !== "undefined" && BOSSES[tr.owner]) tr.thru = 1;
   if (G.mods && G.mods.traceRead) { tr.warn *= 1.32; tr.read = 1; }
   G.traces.push(tr);
   return tr;
 }
+/* How long the line actually is right now. A hazard line is the main thing
+   a ranged enemy reaches you with, so cover has to stop one or cover means
+   nothing: the line is cut at the first wall it runs into, and the cut
+   length is what both the damage test and the drawing use, so what you see
+   is exactly what can hit you. Recomputed each frame because plenty of
+   lines rotate (`spin`) or ride a moving body (`follow`).
+   `thru` opts a line out — the bosses' room-wide sweeps use it, since their
+   arenas deliberately keep the middle clear for them. */
+function traceLen(tr) {
+  if (tr.kind !== "line") return tr.len;
+  if (tr.thru || typeof arenaRay !== "function") return tr.len;
+  if (tr.clipT === G.time) return tr.clipLen;
+  tr.clipT = G.time;
+  tr.clipLen = arenaRay(tr.x, tr.y, tr.ang, tr.len);
+  return tr.clipLen;
+}
 function traceHit(tr, x, y, pad) {
   if (tr.kind === "disc") return Math.hypot(x - tr.x, y - tr.y) < tr.r + pad;
   if (tr.kind === "ring") return Math.abs(Math.hypot(x - tr.x, y - tr.y) - tr.r) < tr.wide / 2 + pad;
-  return segDist(x, y, tr.x, tr.y, tr.x + Math.cos(tr.ang) * tr.len, tr.y + Math.sin(tr.ang) * tr.len) < tr.wide / 2 + pad;
+  const L = traceLen(tr);
+  return segDist(x, y, tr.x, tr.y, tr.x + Math.cos(tr.ang) * L, tr.y + Math.sin(tr.ang) * L) < tr.wide / 2 + pad;
 }
 function inLiveTrace(x, y, r) {
   for (const tr of G.traces) {
@@ -361,10 +382,11 @@ function updateTraces(dt) {
     if (wasWarn && tr.t >= tr.warn && (tr.dmg > 0 || tr.dot > 0)) {
       /* the strike lands: scorch the line */
       if (tr.kind === "line") {
-        const n = Math.round(clamp(tr.len / 60, 2, 9) * G.quality);
+        const cl = traceLen(tr);
+        const n = Math.round(clamp(cl / 60, 2, 9) * G.quality);
         for (let k = 0; k < n; k++) {
           const f = (k + rnd(1)) / n;
-          part(tr.x + Math.cos(tr.ang) * tr.len * f, tr.y + Math.sin(tr.ang) * tr.len * f,
+          part(tr.x + Math.cos(tr.ang) * cl * f, tr.y + Math.sin(tr.ang) * cl * f,
             { col: tr.col, s: rnd(20, 90), life: rnd(.3, .7), size: rnd(1, 2.6) });
         }
       }
@@ -382,8 +404,8 @@ function updateTraces(dt) {
       if (traceHit(tr, p.x, p.y, p.r)) hurtPlayer(tr.dot * dt * (m && m.traceRead ? .75 : 1));
       for (const e of G.enemies) if (e.type !== tr.owner && traceHit(tr, e.x, e.y, e.r)) damageEnemy(e, tr.dot * .55 * dt, { spark: chance(.06), noCrit: true });
       if (chance(dt * 9 * G.quality) && tr.kind === "line") {
-        const f = rnd(1);
-        part(tr.x + Math.cos(tr.ang) * tr.len * f, tr.y + Math.sin(tr.ang) * tr.len * f,
+        const f = rnd(1), cl = traceLen(tr);
+        part(tr.x + Math.cos(tr.ang) * cl * f, tr.y + Math.sin(tr.ang) * cl * f,
           { col: tr.col, s: rnd(10, 45), a: -Math.PI / 2 + rnd(-.6, .6), life: rnd(.3, .8), size: rnd(.8, 2.1), drag: .9 });
       }
     }
@@ -470,7 +492,7 @@ function drawTraces() {
     }
     ctx.save();
     ctx.translate(tr.x, tr.y); ctx.rotate(tr.ang);
-    const w = tr.wide, L = tr.len;
+    const w = tr.wide, L = traceLen(tr);
     /* wide lanes get thinner ink so they never paint over the fight */
     const wf = clamp(24 / w, .5, 1);
     if (tr.t < tr.warn) {

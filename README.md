@@ -25,6 +25,12 @@ and cosmetics are saved to the browser's `localStorage`.
 `WASD` move · aim/fire are automatic · `Space` dash (or swap places with your
 decoy) · `E` summon an echo/decoy · `T` toggle day/night theme · `Esc` pause.
 
+The dash goes where you are **steering**, not where you are pointing — the gun
+keeps facing whatever it was shooting, so you can dash out of a squeeze while
+still firing into it. It carries invulnerability past the end of the launch and
+a short speed burst after it, which is what makes it an escape rather than a
+fast walk.
+
 ## Project layout
 
 This game started as one ~9,800-line HTML file and has been split into sections
@@ -59,8 +65,11 @@ js/
   09-enemies-and-render.js Enemy AI update loop, boss behaviour, projectile/
                           pickup updates, the main world/HUD render pass.
   10-branch-ai.js         Branch-specific enemy AI (the TLAI table).
-  11-branch-physics.js    Branch-specific room physics (stasis, rewind,
-                          entropy) and the BRANCH hook table.
+  11-branch-physics.js    The arena geometry engine (solid boxes, collision,
+                          line-of-sight), the twelve room layouts, and the
+                          branch room physics: Glassfall's shattering floor,
+                          Emberwake's heatwaves and flame spurts, Nulltide's
+                          undertow, the Terminus clock and the second behind.
   12-hud-and-screens.js   HUD widgets, screen routing, the Echo Lab shop UI,
                           settings panel, the boot terminal sequence.
   13-cinematic.js         The "Cold Open" intro cinematic.
@@ -80,6 +89,15 @@ js/
 - New branch/timeline mechanics touch three places: content in
   `js/02-content-branches.js`, its AI in `js/10-branch-ai.js`, and its room
   physics in `js/11-branch-physics.js`.
+- Room shapes are authored in the `LAYOUTS` table in `js/11-branch-physics.js`
+  as rounded (optionally rotated) solid boxes cut out of the branch's floor.
+  Two rules there are load-bearing rather than stylistic: openings are sized in
+  pixels so a chokepoint stays one at any window size, and in a branch whose
+  floor shrinks no wall may reach past `WALL_MAX_R` — if a closing rim can shut
+  inside a wall, you end up stuck between the two.
+- `docs/TUNING.md` is the reference for every knockback, dash, arena and
+  branch-mechanic constant: what it does, what moving it changes, and the
+  measured numbers each curve actually produces.
 - Everything is global (no imports/exports), so a function or constant is
   visible to every file loaded after it in `index.html`. If you add a new
   file, add its `<script>` tag in the right position.
